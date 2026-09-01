@@ -178,6 +178,7 @@ class Hub:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         cum = daily = 0.0
         n_fills = 0
+        questions: dict[str, str] = {}   # market_id -> question, from discovery events
         recent_fills: deque[dict] = deque(maxlen=self.fills.maxlen)
         with p.open(encoding="utf-8") as f:
             for line in f:
@@ -186,7 +187,13 @@ class Hub:
                 except json.JSONDecodeError:
                     continue
                 t = ev.get("type")
-                if t == "fill":
+                if t == "market_discovered":
+                    if ev.get("condition_id"):
+                        questions[ev["condition_id"]] = ev.get("question") or ev.get("slug") or ""
+                elif t == "fill":
+                    if not ev.get("market"):   # older records: backfill the title
+                        ev["market"] = questions.get(ev.get("market_id", ""), "") \
+                            or (ev.get("market_id") or "")[:12]
                     recent_fills.append(ev)
                     n_fills += 1
                 elif t == "resolved":
