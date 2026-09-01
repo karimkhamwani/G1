@@ -151,8 +151,9 @@ function cards(s){
             <td>matched</td><td>${p.matched}</td></tr>
         <tr><td>filled Y</td><td class="${fillCls(p.yes_bought,p.yes_ordered)}">${filled(p.yes_bought,p.yes_ordered,p.yes_fills)}</td>
             <td>filled N</td><td class="${fillCls(p.no_bought,p.no_ordered)}">${filled(p.no_bought,p.no_ordered,p.no_fills)}</td></tr>
-        <tr><td>skew</td><td>${p.skew_side?p.skew_side+' '+p.skew_shares:'–'}</td>
-            <td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td></tr>
+        <tr><td>skew L2</td><td>${p.skew_side?p.skew_side+' '+p.skew_bought:'–'}</td>
+            <td>net side</td><td>${p.net_side?p.net_side+' '+p.net_shares:'flat'}</td></tr>
+        <tr><td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td><td></td><td></td></tr>
         <tr><td>uPnL</td><td class="${cls(p.unrealized)}">${fmt(p.unrealized)}</td><td></td><td></td></tr>
       </table>`}
     </div>`}).join('');

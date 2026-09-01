@@ -48,7 +48,8 @@ def build_app(hub, spot_feed, executor, risk, trades_path=None) -> FastAPI:
         return {"ok": True, "paused": hub.paused, "halted": hub.halted}
 
     HISTORY_COLS = ["ts", "question", "asset", "duration_s", "mode", "winner", "pnl",
-                    "l1", "l2", "combined_avg", "matched", "skew_side", "skew_shares",
+                    "l1", "l2", "combined_avg", "matched", "skew_side", "skew_bought",
+                    "net_side", "net_shares",
                     "fees_paid", "regime", "fills"]
 
     @app.get("/api/history.csv", response_class=PlainTextResponse)

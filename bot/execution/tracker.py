@@ -14,7 +14,8 @@ class Position:
     ordered: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     bought: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     fill_count: dict[Side, int] = field(default_factory=lambda: {Side.YES: 0, Side.NO: 0})
-    skew_bought: float = 0.0
+    skew_bought: float = 0.0                    # total layer-2 shares bought (gates the cap)
+    skew_by_side: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     tp_taken: set[float] = field(default_factory=set)
     base_placed: bool = False
     realized: float = 0.0                       # from sells before resolution
@@ -36,6 +37,7 @@ class Position:
                 self.adds_used[f.side] += 1
             if f.signal is SignalType.SKEW:
                 self.skew_bought += f.shares
+                self.skew_by_side[f.side] += f.shares
         else:  # SELL — reduce at average cost, book the difference as realized
             avg = self.avg(f.side) or 0.0
             sell = min(f.shares, self.shares[f.side])
@@ -70,6 +72,16 @@ class Position:
         return min(self.shares[Side.YES], self.shares[Side.NO])
 
     @property
+    def skew_l2_side(self) -> Side | None:
+        """Side layer 2 actually bought (None if it never fired)."""
+        y, n = self.skew_by_side[Side.YES], self.skew_by_side[Side.NO]
+        if y > n:
+            return Side.YES
+        if n > y:
+            return Side.NO
+        return None
+
+    @property
     def skew_side(self) -> Side | None:
         if self.shares[Side.YES] > self.shares[Side.NO]:
             return Side.YES
@@ -79,6 +91,7 @@ class Position:
 
     @property
     def skew_shares(self) -> float:
+        """NET directional imbalance from all layers — not layer-2 buying (see skew_bought)."""
         return abs(self.shares[Side.YES] - self.shares[Side.NO])
 
     @property
