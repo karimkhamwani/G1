@@ -116,6 +116,16 @@ function chips(s){
     <div class="chip"><small>feeds</small><b style="font-size:11px">${feeds||'–'}</b></div>`;
 }
 
+// filled vs ordered shares for one side, with the number of fill events
+function filled(bought,ordered,n){
+  if(!ordered) return '–';
+  return `${bought}/${ordered} (${n})`;
+}
+function fillCls(bought,ordered){
+  if(!ordered) return 'dim';
+  return bought>=ordered-0.05 ? 'pos' : 'neg';   // short fills are the interesting case
+}
+
 function cards(s){
   if(!s.markets.length){$('cards').innerHTML='<span class="dim">no active windows — waiting for discovery…</span>';return}
   $('cards').innerHTML=s.markets.map(m=>{
@@ -139,6 +149,8 @@ function cards(s){
             <td>pos N</td><td>${p.no_shares} @ ${fmt(p.no_avg,3)}</td></tr>
         <tr><td>c.avg</td><td class="${ca==null?'':ca<1?'pos':'neg'}">${fmt(ca,3)}</td>
             <td>matched</td><td>${p.matched}</td></tr>
+        <tr><td>filled Y</td><td class="${fillCls(p.yes_bought,p.yes_ordered)}">${filled(p.yes_bought,p.yes_ordered,p.yes_fills)}</td>
+            <td>filled N</td><td class="${fillCls(p.no_bought,p.no_ordered)}">${filled(p.no_bought,p.no_ordered,p.no_fills)}</td></tr>
         <tr><td>skew</td><td>${p.skew_side?p.skew_side+' '+p.skew_shares:'–'}</td>
             <td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td></tr>
         <tr><td>uPnL</td><td class="${cls(p.unrealized)}">${fmt(p.unrealized)}</td><td></td><td></td></tr>

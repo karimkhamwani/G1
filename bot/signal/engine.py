@@ -81,6 +81,8 @@ class SignalEngine:
                     "fair_yes": round(fair, 4), "regime": regime.label,
                     "chop": round(regime.chop_score, 2), "reason": intent.reason,
                 })
+                if intent.action is Action.BUY:
+                    rt.position.ordered[intent.side] += intent.shares
                 self.executor.submit(intent)
                 submitted.append(intent)
             else:

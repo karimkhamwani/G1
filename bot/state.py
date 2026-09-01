@@ -119,6 +119,12 @@ class Hub:
                     "skew_shares": round(p.skew_shares, 2),
                     "adds_yes": p.adds_used[Side.YES],
                     "adds_no": p.adds_used[Side.NO],
+                    "yes_ordered": round(p.ordered[Side.YES], 2),
+                    "no_ordered": round(p.ordered[Side.NO], 2),
+                    "yes_bought": round(p.bought[Side.YES], 2),
+                    "no_bought": round(p.bought[Side.NO], 2),
+                    "yes_fills": p.fill_count[Side.YES],
+                    "no_fills": p.fill_count[Side.NO],
                     "unrealized": (lambda u: round(u, 2) if u is not None else None)(p.unrealized(rt.mid)),
                 },
             })

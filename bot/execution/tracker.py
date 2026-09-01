@@ -11,6 +11,9 @@ class Position:
     shares: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     cost: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     adds_used: dict[Side, int] = field(default_factory=lambda: {Side.YES: 0, Side.NO: 0})
+    ordered: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
+    bought: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
+    fill_count: dict[Side, int] = field(default_factory=lambda: {Side.YES: 0, Side.NO: 0})
     skew_bought: float = 0.0
     tp_taken: set[float] = field(default_factory=set)
     base_placed: bool = False
@@ -26,6 +29,8 @@ class Position:
         if f.action.value == "BUY":
             self.shares[f.side] += f.shares
             self.cost[f.side] += f.price * f.shares + f.fee
+            self.bought[f.side] += f.shares
+            self.fill_count[f.side] += 1
             self.layer_cost[layer] += f.price * f.shares + f.fee
             if f.signal is SignalType.SCALE_ADD:
                 self.adds_used[f.side] += 1
@@ -44,6 +49,10 @@ class Position:
         self.fills.append(f)
 
     # ---- derived views -------------------------------------------------
+    def fill_rate(self, side: Side) -> float | None:
+        """Share of ordered volume that actually filled (None before any order)."""
+        return self.bought[side] / self.ordered[side] if self.ordered[side] > 0 else None
+
     def avg(self, side: Side) -> float | None:
         if self.shares[side] <= 0:
             return None
