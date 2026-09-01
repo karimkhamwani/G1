@@ -49,6 +49,15 @@ class PaperExecutor:
         self._pending.clear()
         return n
 
+    def open_shares(self, market_id: str, side: Side) -> float:
+        """BUY shares still working (queued for latency or resting) for market/side."""
+        total = sum(i.shares for _, i in self._pending
+                    if i.market_id == market_id and i.side is side and i.action is Action.BUY)
+        total += sum(o.remaining for o in self.orders.values()
+                     if o.status == OrderStatus.RESTING and o.intent.market_id == market_id
+                     and o.intent.side is side and o.intent.action is Action.BUY)
+        return total
+
     def on_trade_print(self, token_id: str, price: float) -> None:
         """A real trade printed on the book — resting buys below it fill through."""
         for o in list(self.orders.values()):

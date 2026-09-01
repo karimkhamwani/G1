@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     add_step_shares: float = 10
     add_jitter_pct: float = 0.25
     chop_score_min: float = 2.0
+    min_net_move_frac: float = 0.0008   # regime: net move below this = "no character yet"
+    min_window_age_s: int = 20          # no ladder adds before the window is this old
+    model_book_divergence_max: float = 0.15  # |fair - mid| beyond this: distrust the MODEL, skip adds
     max_adds_per_side_5m: int = 3
     step_decay_5m: float = 0.7
     max_adds_per_side_15m: int = 6
@@ -44,6 +47,7 @@ class Settings(BaseSettings):
     skew_step_shares: float = 10
     max_skew_shares: float = 40
     book_imbalance_min: float = 0.2
+    max_skew_price: float = 0.85        # never buy skew above this (poor risk/reward + fee)
 
     # risk
     max_shares_per_market: float = 120
@@ -63,6 +67,7 @@ class Settings(BaseSettings):
     take_profit_levels: str = "0.90,0.97"
     fast_cancel_spot_move: float = 0.0008
     fee_refresh_min: int = 30
+    default_fee_bps: float = 1000       # assumed when the fee fetch fails or returns 0
     paper_latency_ms: int = 300
 
     # endpoints

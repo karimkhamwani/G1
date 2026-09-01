@@ -134,3 +134,97 @@ def test_regime_classifier_labels():
     assert trending.trending
     choppy = classify([100_000, 100_100, 99_900, 100_080, 99_950, 100_010], 100_000, 2.0)
     assert not choppy.trending
+
+
+class PendingAwareExecutor(CollectingExecutor):
+    """Simulates orders that never fill: open_shares reflects everything submitted."""
+
+    def open_shares(self, market_id, side):
+        return sum(i.shares for i in self.intents
+                   if i.market_id == market_id and i.side is side
+                   and i.action is Action.BUY)
+
+
+def make_env_exec(spot_prices, spot_now, book_yes, book_no, position_fills=(),
+                  drift=0.0, executor=None, start_offset=120):
+    s = Settings(_env_file=None, dashboard_port=0)
+    hub = Hub()
+    now = time.time()
+    m = Market(condition_id="c1", slug="test", question="test?", asset="BTC",
+               duration_s=300, start_ts=now - start_offset, end_ts=now + 180,
+               token={Side.YES: "ty", Side.NO: "tn"}, strike=100_000.0)
+    rt = MarketRuntime(market=m)
+    rt.books[Side.YES] = book_yes
+    rt.books[Side.NO] = book_no
+    rt.position.base_placed = True
+    for f in position_fills:
+        rt.position.apply_fill(f)
+    hub.markets["c1"] = rt
+    ex = executor or CollectingExecutor()
+    eng = SignalEngine(s, hub, {"BTC": FakeSpot(spot_now, spot_prices, drift=drift)},
+                       PermissiveRisk(), ex, NullRecorder(), rng=random.Random(7))
+    return s, hub, rt, ex, eng
+
+
+def test_pending_order_blocks_duplicate_add():
+    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    ex = PendingAwareExecutor()
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35),
+                                      fills, executor=ex)
+    eng.evaluate(rt)
+    n_first = len([i for i in ex.intents if i.signal is SignalType.SCALE_ADD])
+    assert n_first == 1
+    rt.last_eval_ts = 0            # bypass throttle; conditions unchanged, order pending
+    eng.evaluate(rt)
+    n_second = len([i for i in ex.intents if i.signal is SignalType.SCALE_ADD])
+    assert n_second == 1           # no duplicate while the first order is working
+
+
+def test_divergence_clamp_blocks_adds():
+    # YES ask crashed to 0.22 while the model still says ~0.5: 0.29 divergence means
+    # the MODEL is suspect - no ladder add, even though the trigger and model gate pass
+    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.20, 0.22), top(0.75, 0.78), fills)
+    eng.evaluate(rt)
+    assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
+
+
+def test_skew_price_cap_and_tp_churn_guard():
+    chop = [100_000, 100_080, 99_930, 100_060, 100_010]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    # confluence YES but ask 0.91 > MAX_SKEW_PRICE -> no skew
+    _, _, rt, ex, eng = make_env_exec(chop, 100_400, top(0.89, 0.91, 900, 100),
+                                      top(0.08, 0.10, 100, 900), fills, drift=5e-6)
+    eng.evaluate(rt)
+    assert not [i for i in ex.intents if i.signal is SignalType.SKEW]
+    # confluence + sane price, but TP already fired once -> churn guard blocks rebuy
+    _, _, rt2, ex2, eng2 = make_env_exec(chop, 100_150, top(0.55, 0.57, 900, 100),
+                                         top(0.43, 0.45, 100, 900), fills, drift=3e-6)
+    rt2.position.tp_taken.add(0.90)
+    eng2.evaluate(rt2)
+    assert not [i for i in ex2.intents if i.signal is SignalType.SKEW]
+
+
+def test_base_leg_repair_fires_once():
+    chop = [100_000, 100_020, 99_990]
+    # base placed; YES leg filled, NO leg died unfilled (bought NO = 0, nothing pending)
+    fills = [buy(Side.YES, 0.50, 20)]
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.48, 0.50), top(0.48, 0.50),
+                                      fills, start_offset=40)
+    eng.evaluate(rt)
+    repairs = [i for i in ex.intents if i.signal is SignalType.BASE_ENTRY]
+    assert len(repairs) == 1 and repairs[0].side is Side.NO
+    rt.last_eval_ts = 0
+    eng.evaluate(rt)               # retried flag set: no second repair
+    assert len([i for i in ex.intents if i.signal is SignalType.BASE_ENTRY]) == 1
+
+
+def test_window_age_gate_blocks_early_adds():
+    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35),
+                                      fills, start_offset=5)  # window only 5s old
+    eng.evaluate(rt)
+    assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]

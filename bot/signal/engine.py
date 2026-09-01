@@ -61,12 +61,13 @@ class SignalEngine:
         rt.fair_yes = fair
         fair_of = {Side.YES: fair, Side.NO: 1.0 - fair}
 
-        regime = classify(spot.prices_since(m.start_ts), m.strike, self.s.chop_score_min)
+        regime = classify(spot.prices_since(m.start_ts), m.strike, self.s.chop_score_min,
+                          self.s.min_net_move_frac)
         rt.regime = regime
 
         intents: list[OrderIntent] = []
         intents += self._base_entry(rt, now)
-        intents += self._scale_adds(rt, fair_of, regime)
+        intents += self._scale_adds(rt, fair_of, regime, now)
         intents += self._skew(rt, fair_of, t_rem)
         intents += self._take_profit(rt)
 
@@ -80,6 +81,9 @@ class SignalEngine:
                     "price": intent.price, "shares": round(intent.shares, 2),
                     "fair_yes": round(fair, 4), "regime": regime.label,
                     "chop": round(regime.chop_score, 2), "reason": intent.reason,
+                    # model diagnostics — needed to debug fair-value quality offline
+                    "sigma": round(sigma, 8), "drift": round(drift, 8),
+                    "spot": spot.price, "strike": m.strike, "t_rem": round(t_rem, 1),
                 })
                 if intent.action is Action.BUY:
                     rt.position.ordered[intent.side] += intent.shares
@@ -90,11 +94,20 @@ class SignalEngine:
                                            "signal": intent.signal.value, "why": verdict})
         return submitted
 
+    # ---- pending-order gate ---------------------------------------------------
+    def _pending(self, market_id: str, side: Side) -> float:
+        """Shares still open at the executor for this market/side — blocks a trigger
+        from re-firing during order latency (the duplicate-order bug)."""
+        open_shares = getattr(self.executor, "open_shares", None)
+        return open_shares(market_id, side) if open_shares else 0.0
+
     # ---- layer 1: base entry ------------------------------------------------
     def _base_entry(self, rt, now: float) -> list[OrderIntent]:
         m, pos = rt.market, rt.position
-        if pos.base_placed or now - m.start_ts > self.s.entry_window_s:
+        if now - m.start_ts > self.s.entry_window_s * 2:
             return []
+        if pos.base_placed:
+            return self._base_leg_repair(rt, now)
         intents = []
         for side in Side:
             top = rt.books[side]
@@ -110,10 +123,40 @@ class SignalEngine:
         pos.base_placed = True
         return intents
 
+    def _base_leg_repair(self, rt, now: float) -> list[OrderIntent]:
+        """A base leg whose order died unfilled (TTL/cancel) leaves unintended one-sided
+        exposure — re-place it once at the current ask."""
+        m, pos = rt.market, rt.position
+        intents = []
+        for side in Side:
+            if pos.bought[side] > 0 or pos.base_retried[side]:
+                continue
+            if self._pending(m.condition_id, side) > 0.5:
+                continue   # original order still working
+            top = rt.books[side]
+            if top.ask is None:
+                continue
+            pos.base_retried[side] = True
+            intents.append(OrderIntent(
+                market_id=m.condition_id, token_id=m.token[side], side=side,
+                action=Action.BUY, price=top.ask, shares=self.s.base_shares,
+                signal=SignalType.BASE_ENTRY,
+                reason="base leg repair (first order died unfilled)",
+            ))
+        return intents
+
     # ---- layer 1: ladder adds (model gate + regime gate) ---------------------
-    def _scale_adds(self, rt, fair_of: dict, regime) -> list[OrderIntent]:
+    def _scale_adds(self, rt, fair_of: dict, regime, now: float) -> list[OrderIntent]:
         m, pos = rt.market, rt.position
         if not pos.base_placed or regime.trending:
+            return []
+        # window-age gate: no adds until the window has shown some character
+        if now - m.start_ts < self.s.min_window_age_s:
+            return []
+        # divergence clamp: when the model and the book disagree wildly, the model is
+        # the one that's probably wrong — do not "buy the edge"
+        yes_mid = rt.books[Side.YES].mid
+        if yes_mid is not None and abs(fair_of[Side.YES] - yes_mid) > self.s.model_book_divergence_max:
             return []
         max_adds, decay = self.s.ladder(m.duration_s)
         intents = []
@@ -123,6 +166,8 @@ class SignalEngine:
                 continue
             if pos.adds_used[side] >= max_adds:
                 continue
+            if self._pending(m.condition_id, side) > 0.5:
+                continue   # an order for this side is already working
             # trigger: ask meaningfully below our own average
             if top.ask > avg - self.s.add_trigger_drop:
                 continue
@@ -174,12 +219,24 @@ class SignalEngine:
         top = rt.books[side]
         if top.ask is None:
             return []
+        # churn guard: once take-profit has fired, never rebuild the skew (the log
+        # showed a sell @0.90 followed by a rebuy @0.91 — pure fee churn)
+        if pos.tp_taken:
+            return []
+        # price cap: never chase the skew into the extremes (risk 91c to win 9c)
+        if top.ask > self.s.max_skew_price:
+            return []
+        if self._pending(m.condition_id, side) > 0.5:
+            return []      # skew order already working — don't double-fire
         # skew must clear fees too
         if effective_cost(top.ask, m.taker_fee_bps) >= fair_of[side]:
             return []
         step = self.s.skew_step_shares * (1.0 + self.rng.uniform(-self.s.add_jitter_pct,
                                                                  self.s.add_jitter_pct))
         shares = max(1.0, round(min(step, self.s.max_skew_shares - pos.skew_bought), 1))
+        # respect the per-side cap here instead of spamming risk vetoes
+        if pos.shares[side] + shares > self.s.max_shares_per_side:
+            return []
         return [OrderIntent(
             market_id=m.condition_id, token_id=m.token[side], side=side,
             action=Action.BUY, price=top.ask, shares=shares, signal=SignalType.SKEW,

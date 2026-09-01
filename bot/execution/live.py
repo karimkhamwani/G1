@@ -73,6 +73,12 @@ class LiveExecutor:
             pass
         return len(self.orders)
 
+    def open_shares(self, market_id: str, side) -> float:
+        """BUY shares still resting at the exchange for this market/side."""
+        return sum(o.remaining for o in self.orders.values()
+                   if o.status == OrderStatus.RESTING and o.intent.market_id == market_id
+                   and o.intent.side is side and o.intent.action is Action.BUY)
+
     def on_trade_print(self, token_id: str, price: float) -> None:
         pass  # real fills come from the user channel
 

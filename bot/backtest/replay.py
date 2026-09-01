@@ -86,6 +86,11 @@ class SimExecutor:
         self.resting.clear()
         return n
 
+    def open_shares(self, market_id: str, side) -> float:
+        return sum(r["i"].shares for r in self.resting
+                   if r["i"].market_id == market_id and r["i"].side is side
+                   and r["i"].action is Action.BUY)
+
     def on_trade_print(self, token_id: str, price: float) -> None:
         for r in list(self.resting):
             i = r["i"]

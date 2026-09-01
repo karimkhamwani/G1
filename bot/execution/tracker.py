@@ -18,6 +18,7 @@ class Position:
     skew_by_side: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     tp_taken: set[float] = field(default_factory=set)
     base_placed: bool = False
+    base_retried: dict[Side, bool] = field(default_factory=lambda: {Side.YES: False, Side.NO: False})
     realized: float = 0.0                       # from sells before resolution
     fees_paid: float = 0.0
     layer_cost: dict[int, float] = field(default_factory=lambda: {1: 0.0, 2: 0.0})

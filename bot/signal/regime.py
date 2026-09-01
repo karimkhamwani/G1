@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MIN_NET_FRAC = 0.0003   # below this net move (as a fraction of strike) the window counts as choppy
+DEFAULT_MIN_NET_FRAC = 0.0003   # below this net move (fraction of strike): "no character yet"
 CHOP_CAP = 99.0
 
 
@@ -23,13 +23,14 @@ class Regime:
         return "trending" if self.trending else "choppy"
 
 
-def classify(prices: list[float], strike: float, chop_score_min: float) -> Regime:
+def classify(prices: list[float], strike: float, chop_score_min: float,
+             min_net_frac: float = DEFAULT_MIN_NET_FRAC) -> Regime:
     if not prices or strike <= 0:
         return Regime(CHOP_CAP, False, 0.0)
     hi, lo, last = max(prices), min(prices), prices[-1]
     net = abs(last - strike)
     net_frac = net / strike
-    if net_frac < MIN_NET_FRAC:
+    if net_frac < min_net_frac:
         return Regime(CHOP_CAP, False, net_frac)
     score = min(CHOP_CAP, (hi - lo) / net)
     return Regime(score, score < chop_score_min, net_frac)
