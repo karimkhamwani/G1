@@ -77,6 +77,12 @@ button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
       <canvas id="equity" height="110"></canvas>
     </div>
     <div class="panel" style="margin-top:12px">
+      <h2>Fills tape <a href="/api/trades.csv" style="color:var(--blue);font-size:10px">all trades csv ↓</a></h2>
+      <div class="scroll"><table class="list" id="fills">
+        <thead><tr><th>market</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>cost</th><th>signal</th></tr></thead>
+        <tbody></tbody></table></div>
+    </div>
+    <div class="panel" style="margin-top:12px">
       <h2>Resolved cycles <a href="/api/history.csv" style="color:var(--blue);font-size:10px">csv ↓</a></h2>
       <div class="scroll"><table class="list" id="history">
         <thead><tr><th>time</th><th>market</th><th>win</th><th>pnl</th><th>L1</th><th>L2</th><th>c.avg</th><th>regime</th></tr></thead>
@@ -85,12 +91,6 @@ button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
   </div>
   <div>
     <div class="panel">
-      <h2>Fills tape <a href="/api/trades.csv" style="color:var(--blue);font-size:10px">all trades csv ↓</a></h2>
-      <div class="scroll"><table class="list" id="fills">
-        <thead><tr><th>market</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>cost</th><th>signal</th></tr></thead>
-        <tbody></tbody></table></div>
-    </div>
-    <div class="panel" style="margin-top:12px">
       <h2>Log</h2>
       <div class="notes" id="notes"></div>
     </div>
@@ -161,7 +161,7 @@ function cards(s){
 
 function tape(s){
   $('fills').tBodies[0].innerHTML=s.fills.map(f=>
-    `<tr><td style="max-width:150px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${f.market||''}">${f.market||(f.market_id||'').slice(0,12)}</td>
+    `<tr><td style="max-width:300px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${f.market||''}">${f.market||(f.market_id||'').slice(0,12)}</td>
      <td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
      <td>${f.side}</td><td>${fmt(f.price,3)}</td><td>${f.shares}</td>
      <td title="incl. fee ${fmt(f.fee,3)}">$${fmt(f.price*f.shares+(f.action==='BUY'?1:-1)*(f.fee||0))}</td>
