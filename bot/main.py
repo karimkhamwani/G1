@@ -26,6 +26,7 @@ class App:
         self.hub = Hub()
         self.hub.mode = self.settings.mode
         self.recorder = Recorder(self.settings.data_dir)
+        self.hub.load_trade_log(self.recorder.trades_path)
         self.risk = RiskManager(self.settings, self.hub, self.recorder)
 
         if self.settings.mode == "live":
@@ -72,7 +73,8 @@ class App:
             asyncio.create_task(self.recorder.flush_loop(), name="recorder"),
         ]
         if s.dashboard_port > 0:
-            app = build_app(self.hub, self.spot_feed, self.executor, self.risk)
+            app = build_app(self.hub, self.spot_feed, self.executor, self.risk,
+                            trades_path=self.recorder.trades_path)
             tasks.append(asyncio.create_task(
                 serve(app, s.dashboard_host, s.dashboard_port), name="dashboard"))
             log.info("dashboard: http://%s:%s", s.dashboard_host, s.dashboard_port)

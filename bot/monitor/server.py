@@ -16,7 +16,7 @@ log = logging.getLogger("dashboard")
 STATIC = Path(__file__).parent / "static" / "index.html"
 
 
-def build_app(hub, spot_feed, executor, risk) -> FastAPI:
+def build_app(hub, spot_feed, executor, risk, trades_path=None) -> FastAPI:
     app = FastAPI(title="polymarket-momentum-bot")
 
     @app.get("/", response_class=HTMLResponse)
@@ -47,19 +47,36 @@ def build_app(hub, spot_feed, executor, risk) -> FastAPI:
             return {"ok": False, "error": "unknown action"}
         return {"ok": True, "paused": hub.paused, "halted": hub.halted}
 
+    HISTORY_COLS = ["ts", "question", "asset", "duration_s", "mode", "winner", "pnl",
+                    "l1", "l2", "combined_avg", "matched", "skew_side", "skew_shares",
+                    "fees_paid", "regime", "fills"]
+
     @app.get("/api/history.csv", response_class=PlainTextResponse)
     async def history_csv() -> str:
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["resolved_ts", "question", "asset", "duration_s", "winner", "pnl",
-                    "layer1_pnl", "layer2_pnl", "combined_avg", "matched", "skew_side",
-                    "skew_shares", "regime", "fills"])
+        w.writerow(HISTORY_COLS)
         for h in hub.history:
-            w.writerow([h.resolved_ts, h.market.question, h.market.asset, h.market.duration_s,
-                        h.winner.value, round(h.pnl, 4), round(h.layer_pnl.get(1, 0), 4),
-                        round(h.layer_pnl.get(2, 0), 4),
-                        round(h.combined_avg, 4) if h.combined_avg else "",
-                        h.matched, h.skew_side or "", h.skew_shares, h.regime, h.fills])
+            w.writerow([h.get(c, "") for c in HISTORY_COLS])
+        return buf.getvalue()
+
+    @app.get("/api/trades.csv", response_class=PlainTextResponse)
+    async def trades_csv() -> str:
+        """Every fill ever recorded, straight from the trade log."""
+        cols = ["ts", "market_id", "side", "action", "price", "shares", "fee", "signal"]
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(cols)
+        if trades_path and Path(trades_path).exists():
+            import json
+            with Path(trades_path).open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("type") == "fill":
+                        w.writerow([ev.get(c, "") for c in cols])
         return buf.getvalue()
 
     return app

@@ -6,7 +6,6 @@ import logging
 import time
 
 from bot.models import Side
-from bot.state import ResolvedCycle
 
 log = logging.getLogger("lifecycle")
 
@@ -42,7 +41,7 @@ class Lifecycle:
             self.recorder.log("strike", {"market_id": m.condition_id, "strike": m.strike})
             self.hub.note(f"{m.asset} {m.duration_s // 60}m window open @ {m.strike:.2f}")
         elif now - m.start_ts > STRIKE_GRACE_S:
-            rt.skipped = "joined late — no reliable open price"
+            rt.skipped = "joined late - no reliable open price"
             self.recorder.log("skip", {"market_id": m.condition_id, "why": rt.skipped})
 
     def _resolve(self, rt, now: float) -> None:
@@ -57,7 +56,7 @@ class Lifecycle:
         spot = self.spots.get(m.asset)
         close = spot.price if spot else None
         if close is None:
-            self.hub.note(f"{m.slug[:40]}: no close price, cannot settle — check manually")
+            self.hub.note(f"{m.slug[:40]}: no close price, cannot settle - check manually")
             return
         # NOTE: settles on Binance spot as an oracle PROXY. The real oracle can disagree;
         # oracle-mismatch measurement is a backtest report item.
@@ -66,21 +65,23 @@ class Lifecycle:
         layers = rt.position.layer_pnl(winner)
         rt.winner, rt.resolution_pnl, rt.layer_pnl = winner, pnl, layers
         self.hub.book_pnl(pnl)
-        self.hub.history.append(ResolvedCycle(
-            market=m, winner=winner, pnl=pnl, layer_pnl=layers,
-            combined_avg=rt.position.combined_avg, matched=rt.position.matched,
-            skew_side=rt.position.skew_side.value if rt.position.skew_side else None,
-            skew_shares=rt.position.skew_shares,
-            regime=rt.regime.label if rt.regime else "-",
-            fills=len(rt.position.fills), resolved_ts=now,
-        ))
-        self.recorder.log("resolved", {
-            "market_id": m.condition_id, "winner": winner.value, "close": close,
-            "strike": m.strike, "pnl": round(pnl, 4),
+        record = {
+            "ts": round(now, 3),
+            "market_id": m.condition_id, "slug": m.slug, "question": m.question,
+            "asset": m.asset, "duration_s": m.duration_s, "mode": self.s.mode,
+            "winner": winner.value, "close": close, "strike": m.strike,
+            "pnl": round(pnl, 4),
             "l1": round(layers[1], 4), "l2": round(layers[2], 4),
-            "combined_avg": rt.position.combined_avg,
+            "combined_avg": round(rt.position.combined_avg, 4) if rt.position.combined_avg else None,
+            "matched": round(rt.position.matched, 2),
+            "skew_side": rt.position.skew_side.value if rt.position.skew_side else None,
+            "skew_shares": round(rt.position.skew_shares, 2),
+            "fees_paid": round(rt.position.fees_paid, 4),
             "regime": rt.regime.label if rt.regime else "-",
-        })
+            "fills": len(rt.position.fills),
+        }
+        self.hub.history.append(record)
+        self.recorder.log("resolved", {k: v for k, v in record.items() if k != "ts"})
         self.hub.note(f"resolved {m.asset} {m.duration_s // 60}m -> {winner.value} "
                       f"pnl {pnl:+.2f} (L1 {layers[1]:+.2f} / L2 {layers[2]:+.2f})")
         if self.s.mode == "live":

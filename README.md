@@ -42,6 +42,20 @@ with CSV export, pause/halt controls.
 Everything the bot sees and does is recorded to `data/YYYY-MM-DD/events.jsonl` —
 paper runs double as backtest data collection.
 
+## Trade log & analysis
+
+Trading events (signals, vetoes, orders, fills, cancels, resolutions, halts — no feed
+noise) are additionally appended to **`data/trades.jsonl`**, one JSON object per line.
+That file is the analysis log:
+
+- the dashboard **restores from it on startup** — fills tape, resolved-cycle history,
+  equity curve, cumulative P&L, and today's daily P&L (so the daily-loss kill switch
+  stays honest across restarts);
+- `/api/trades.csv` exports every fill ever recorded; `/api/history.csv` exports the
+  resolved cycles (both linked from the dashboard);
+- being JSONL, it loads straight into pandas:
+  `pd.read_json("data/trades.jsonl", lines=True)`.
+
 ## Backtest
 
 After a few days of paper running:
@@ -80,7 +94,6 @@ Polymarket UI (the bot logs a reminder at each resolution).
   skipped (no reliable open price).
 - Resolution is settled against Binance spot as an **oracle proxy** in paper mode; the
   real oracle can disagree (see plan.md Known Risks).
-- The spot feed host is `BINANCE_WS` in `.env`; if it is unreachable from your network,
-  point it at an endpoint that works for you.
+- The spot feed host is `BINANCE_WS` in `.env`.
 - Kill switch: daily loss beyond `MAX_DAILY_LOSS_USDC` cancels everything and halts;
   feed loss while exposed cancels all resting orders immediately.

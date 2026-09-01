@@ -38,26 +38,11 @@ class MarketRuntime:
                 and m.strike is not None and m.start_ts <= now < m.end_ts)
 
 
-@dataclass
-class ResolvedCycle:
-    market: Market
-    winner: Side
-    pnl: float
-    layer_pnl: dict[int, float]
-    combined_avg: float | None
-    matched: float
-    skew_side: str | None
-    skew_shares: float
-    regime: str
-    fills: int
-    resolved_ts: float
-
-
 class Hub:
     def __init__(self) -> None:
         self.markets: dict[str, MarketRuntime] = {}
-        self.history: list[ResolvedCycle] = []
-        self.fills: deque[Fill] = deque(maxlen=500)
+        self.history: list[dict] = []          # resolved-cycle records (same shape as the trade log)
+        self.fills: deque[dict] = deque(maxlen=500)
         self.equity_curve: deque[tuple[float, float]] = deque(maxlen=2000)
         self.session_pnl: float = 0.0
         self.daily_pnl: float = 0.0
@@ -83,7 +68,7 @@ class Hub:
         rt = self.markets.get(fill.market_id)
         if rt:
             rt.position.apply_fill(fill)
-        self.fills.appendleft(fill)
+        self.fills.appendleft(fill.as_dict())
 
     def book_pnl(self, amount: float) -> None:
         self.session_pnl += amount
@@ -150,14 +135,58 @@ class Hub:
                       for name in self.feed_ts},
             "spots": spots or {},
             "markets": active_cards,
-            "fills": [f.as_dict() for f in list(self.fills)[:60]],
+            "fills": list(self.fills)[:60],
             "equity": [[round(t, 1), round(v, 2)] for t, v in self.equity_curve],
             "history": [{
-                "question": h.market.question, "winner": h.winner.value,
-                "pnl": round(h.pnl, 2),
-                "l1": round(h.layer_pnl.get(1, 0), 2), "l2": round(h.layer_pnl.get(2, 0), 2),
-                "combined_avg": round(h.combined_avg, 4) if h.combined_avg else None,
-                "regime": h.regime, "fills": h.fills, "ts": h.resolved_ts,
+                "question": h.get("question", ""), "winner": h.get("winner", ""),
+                "pnl": round(h.get("pnl", 0), 2),
+                "l1": round(h.get("l1", 0), 2), "l2": round(h.get("l2", 0), 2),
+                "combined_avg": round(h["combined_avg"], 4) if h.get("combined_avg") else None,
+                "regime": h.get("regime", "-"), "fills": h.get("fills", 0),
+                "ts": h.get("ts", 0),
             } for h in self.history[-100:]],
             "notes": list(self.notes)[:30],
         }
+
+    # ---- restore from the trade log ---------------------------------------
+    def load_trade_log(self, path) -> None:
+        """Rebuild fills tape, resolved history, equity curve, and P&L totals from
+        data/trades.jsonl so the dashboard survives restarts. Daily P&L is also
+        restored, which keeps the daily-loss kill switch honest across restarts."""
+        import json
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.exists():
+            return
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cum = daily = 0.0
+        n_fills = 0
+        recent_fills: deque[dict] = deque(maxlen=self.fills.maxlen)
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = ev.get("type")
+                if t == "fill":
+                    recent_fills.append(ev)
+                    n_fills += 1
+                elif t == "resolved":
+                    pnl = float(ev.get("pnl", 0))
+                    cum += pnl
+                    ts = float(ev.get("ts", 0))
+                    self.equity_curve.append((ts, round(cum, 4)))
+                    self.history.append(ev)
+                    if datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d") == today:
+                        daily += pnl
+        for fl in recent_fills:
+            self.fills.appendleft(fl)
+        self.session_pnl = cum
+        self.daily_pnl = daily
+        self.daily_key = today
+        if n_fills or self.history:
+            self.note(f"restored from trade log: {n_fills} fills, "
+                      f"{len(self.history)} resolved cycles, total pnl {cum:+.2f}")

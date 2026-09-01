@@ -88,7 +88,7 @@ class MarketBookFeed:
                     return
                 fails += 1
                 if fails <= 2 or fails % 10 == 0:
-                    log.warning("book feed %s error (%d): %r — retrying in %.0fs",
+                    log.warning("book feed %s error (%d): %r - retrying in %.0fs",
                                 m.slug[:40], fails, e, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 15.0)

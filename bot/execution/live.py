@@ -8,7 +8,7 @@ The client is synchronous, so calls run in a thread executor. Fills arrive via t
 CLOB v2 user-channel websocket; REST reconciliation runs on connect.
 
 NOTE: redemption of resolved positions is an on-chain ConditionalTokens call and is
-NOT automated here yet — winnings must be redeemed via the Polymarket UI (logged as a
+NOT automated here yet - winnings must be redeemed via the Polymarket UI (logged as a
 reminder at each resolution).
 """
 from __future__ import annotations
@@ -153,7 +153,7 @@ class LiveExecutor:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
-                log.warning("user channel error: %s — reconnecting", e)
+                log.warning("user channel error: %s - reconnecting", e)
                 await asyncio.sleep(2)
 
     def _on_trade_event(self, ev: dict) -> None:

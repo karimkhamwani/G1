@@ -5,15 +5,23 @@ import asyncio
 import json
 import logging
 import math
+import ssl
 import statistics
 import time
-from collections import deque
 
 import websockets
 
 log = logging.getLogger("spot")
 
 SYMBOL = {"BTC": "btcusdt", "ETH": "ethusdt"}
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Default verification, minus Python 3.13's VERIFY_X509_STRICT (some exchange
+    CA chains fail the strict check; certs are still fully verified)."""
+    ctx = ssl.create_default_context()
+    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return ctx
 
 
 class SpotState:
@@ -23,7 +31,7 @@ class SpotState:
         self.ts: float = 0.0
         self.vol_window_s = vol_window_s
         # 1-second bars: (ts, close)
-        self.bars: deque[tuple[float, float]] = deque(maxlen=max(vol_window_s, 1200))
+        self.bars: list[tuple[float, float]] = []
         self._bar_ts: int = 0
         self.ewma: dict[float, float] = {tau: 0.0 for tau in ewma_taus}  # log-return rate /s
         self._sigma_cache: tuple[float, float] = (0.0, 0.0)  # (computed_at, value)
@@ -42,11 +50,12 @@ class SpotState:
                     a = 1.0 - math.exp(-dt / tau)
                     self.ewma[tau] = a * r + (1 - a) * self.ewma[tau]
             self.bars.append((float(sec), price))
+            if len(self.bars) > max(self.vol_window_s, 1200) + 600:
+                self.bars = self.bars[-max(self.vol_window_s, 1200):]
             self._bar_ts = sec
             new_bar = True
-        else:
-            if self.bars:
-                self.bars[-1] = (self.bars[-1][0], price)
+        elif self.bars:
+            self.bars[-1] = (self.bars[-1][0], price)
         return new_bar
 
     @property
@@ -75,7 +84,7 @@ class SpotState:
         return sum(self.ewma.values()) / len(self.ewma)
 
     def prices_since(self, since_ts: float) -> list[float]:
-        return [c for t, c in self.bars if t >= since_ts]
+        return [p for t, p in self.bars if t >= since_ts]
 
 
 class SpotFeed:
@@ -97,7 +106,8 @@ class SpotFeed:
         sym_to_asset = {SYMBOL[a]: a for a in self.states}
         while True:
             try:
-                async with websockets.connect(url, ping_interval=20, max_queue=2048) as ws:
+                async with websockets.connect(url, ping_interval=20, max_queue=2048,
+                                              ssl=_ssl_context()) as ws:
                     log.info("spot feed connected: %s", streams)
                     self.hub.note("spot feed connected")
                     async for raw in ws:
@@ -105,8 +115,7 @@ class SpotFeed:
                         data = msg.get("data", msg)
                         if data.get("e") != "trade":
                             continue
-                        sym = data["s"].lower()
-                        asset = sym_to_asset.get(sym)
+                        asset = sym_to_asset.get(data["s"].lower())
                         if not asset:
                             continue
                         price = float(data["p"])
@@ -122,8 +131,8 @@ class SpotFeed:
                         self.on_tick(asset)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001 — reconnect on any transport error
-                log.warning("spot feed error: %r — reconnecting in 2s", e)
+            except Exception as e:  # noqa: BLE001 - reconnect on any transport error
+                log.warning("spot feed error: %r - reconnecting in 2s", e)
                 self.hub.note(f"spot feed lost ({e}); reconnecting")
                 await asyncio.sleep(2)
 
