@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Momentum Bot</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#21262d;--text:#e6edf3;--dim:#8b949e;
+--green:#3fb950;--red:#f85149;--amber:#d29922;--blue:#58a6ff;--purple:#bc8cff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;padding:14px}
+h1{font-size:15px;letter-spacing:.4px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.chip{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 12px}
+.chip b{display:block;font-size:15px}
+.chip small{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+.pos{color:var(--green)}.neg{color:var(--red)}.dim{color:var(--dim)}
+.badge{padding:2px 9px;border-radius:10px;font-weight:700;font-size:11px}
+.badge.paper{background:#1f3a5f;color:var(--blue)}
+.badge.live{background:#5a1e1e;color:var(--red)}
+.badge.halted{background:var(--red);color:#fff}
+.badge.paused{background:var(--amber);color:#000}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.ok{background:var(--green)}.bad{background:var(--red)}
+main{display:grid;grid-template-columns:1fr 380px;gap:12px;margin-top:12px}
+@media(max-width:1100px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.panel h2{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.card{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px}
+.card .q{color:var(--dim);font-size:11px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card table{width:100%;border-collapse:collapse}
+.card td{padding:1px 4px}
+.card td:last-child{text-align:right}
+.count{font-size:16px;font-weight:700}
+.bar{height:5px;background:var(--border);border-radius:3px;margin:6px 0;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--blue)}
+table.list{width:100%;border-collapse:collapse;font-size:11.5px}
+table.list th{color:var(--dim);text-align:left;padding:3px 6px;font-weight:400;border-bottom:1px solid var(--border)}
+table.list td{padding:3px 6px;border-bottom:1px solid var(--border)}
+table.list tr:last-child td{border-bottom:none}
+canvas{width:100%;height:110px}
+button{background:var(--border);color:var(--text);border:1px solid #30363d;border-radius:6px;
+padding:6px 14px;cursor:pointer;font:inherit}
+button:hover{background:#30363d}
+button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
+.notes{max-height:150px;overflow-y:auto;font-size:11px;color:var(--dim)}
+.scroll{max-height:340px;overflow-y:auto}
+#conn{position:fixed;top:10px;right:14px;font-size:11px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="conn">connecting…</div>
+<div class="row" style="justify-content:space-between">
+  <div class="row">
+    <h1>⚡ momentum bot</h1>
+    <span id="mode" class="badge paper">–</span>
+    <span id="state" class="badge" style="display:none"></span>
+  </div>
+  <div class="row">
+    <button onclick="ctl('pause')">⏸ pause entries</button>
+    <button onclick="ctl('resume')">▶ resume</button>
+    <button class="danger" onclick="if(confirm('Cancel all orders and halt the bot?'))ctl('halt')">🛑 flatten &amp; halt</button>
+  </div>
+</div>
+
+<div class="row" style="margin-top:10px" id="chips"></div>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>Active markets</h2>
+      <div class="cards" id="cards"><span class="dim">waiting for markets…</span></div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <h2>Equity (session P&amp;L)</h2>
+      <canvas id="equity" height="110"></canvas>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <h2>Resolved cycles <a href="/api/history.csv" style="color:var(--blue);font-size:10px">csv ↓</a></h2>
+      <div class="scroll"><table class="list" id="history">
+        <thead><tr><th>time</th><th>market</th><th>win</th><th>pnl</th><th>L1</th><th>L2</th><th>c.avg</th><th>regime</th></tr></thead>
+        <tbody></tbody></table></div>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <h2>Fills tape</h2>
+      <div class="scroll"><table class="list" id="fills">
+        <thead><tr><th>time</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>signal</th></tr></thead>
+        <tbody></tbody></table></div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <h2>Log</h2>
+      <div class="notes" id="notes"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=(v,d=2)=>v==null?'–':(+v).toFixed(d);
+const cls=v=>v>0?'pos':v<0?'neg':'';
+const hhmm=t=>new Date(t*1000).toTimeString().slice(0,8);
+
+function chips(s){
+  const feeds=Object.entries(s.feeds||{}).map(([n,age])=>
+    `<span><span class="dot ${age!=null&&age<3?'ok':'bad'}"></span>${n}${age!=null?' '+age+'s':''}</span>`).join(' ');
+  const spots=Object.entries(s.spots||{}).map(([a,v])=>
+    `<div class="chip"><small>${a}</small><b>${v.price?(+v.price).toLocaleString():'–'}</b></div>`).join('');
+  $('chips').innerHTML=`
+    <div class="chip"><small>session pnl</small><b class="${cls(s.session_pnl)}">${fmt(s.session_pnl)}</b></div>
+    <div class="chip"><small>daily pnl</small><b class="${cls(s.daily_pnl)}">${fmt(s.daily_pnl)}</b></div>
+    <div class="chip"><small>exposure</small><b>$${fmt(s.exposure)}</b></div>
+    ${spots}
+    <div class="chip"><small>feeds</small><b style="font-size:11px">${feeds||'–'}</b></div>`;
+}
+
+function cards(s){
+  if(!s.markets.length){$('cards').innerHTML='<span class="dim">no active windows — waiting for discovery…</span>';return}
+  $('cards').innerHTML=s.markets.map(m=>{
+    const p=m.pos,frac=Math.max(0,Math.min(1,m.t_rem/m.duration));
+    const conf=m.confluence>0?'<span class="pos">▲ YES</span>':m.confluence<0?'<span class="neg">▼ NO</span>':'<span class="dim">–</span>';
+    const ca=p.combined_avg;
+    return `<div class="card">
+      <div class="q">${m.question||m.id}</div>
+      <div class="row" style="justify-content:space-between">
+        <span class="count">${Math.floor(m.t_rem/60)}:${String(m.t_rem%60).padStart(2,'0')}</span>
+        <span>${m.regime==='choppy'?'〰':'📈'} ${m.regime} (${fmt(m.chop,1)})</span>
+        <span>conf ${conf}</span>
+      </div>
+      <div class="bar"><i style="width:${frac*100}%"></i></div>
+      ${m.skipped?`<div class="dim">skipped: ${m.skipped}</div>`:`
+      <table>
+        <tr><td>fair YES</td><td>${fmt(m.fair_yes,3)}</td><td>strike</td><td>${m.strike?(+m.strike).toLocaleString():'–'}</td></tr>
+        <tr><td>YES</td><td>${fmt(m.books.YES.bid,2)}/${fmt(m.books.YES.ask,2)}</td>
+            <td>NO</td><td>${fmt(m.books.NO.bid,2)}/${fmt(m.books.NO.ask,2)}</td></tr>
+        <tr><td>pos Y</td><td>${p.yes_shares} @ ${fmt(p.yes_avg,3)}</td>
+            <td>pos N</td><td>${p.no_shares} @ ${fmt(p.no_avg,3)}</td></tr>
+        <tr><td>c.avg</td><td class="${ca==null?'':ca<1?'pos':'neg'}">${fmt(ca,3)}</td>
+            <td>matched</td><td>${p.matched}</td></tr>
+        <tr><td>skew</td><td>${p.skew_side?p.skew_side+' '+p.skew_shares:'–'}</td>
+            <td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td></tr>
+        <tr><td>uPnL</td><td class="${cls(p.unrealized)}">${fmt(p.unrealized)}</td><td></td><td></td></tr>
+      </table>`}
+    </div>`}).join('');
+}
+
+function tape(s){
+  $('fills').tBodies[0].innerHTML=s.fills.map(f=>
+    `<tr><td>${hhmm(f.ts)}</td><td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
+     <td>${f.side}</td><td>${fmt(f.price,3)}</td><td>${f.shares}</td>
+     <td class="dim">${f.signal.replace('_',' ').toLowerCase()}</td></tr>`).join('');
+  $('history').tBodies[0].innerHTML=s.history.slice().reverse().map(h=>
+    `<tr><td>${hhmm(h.ts)}</td><td class="dim" style="max-width:180px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${h.question}</td>
+     <td>${h.winner}</td><td class="${cls(h.pnl)}">${fmt(h.pnl)}</td>
+     <td class="${cls(h.l1)}">${fmt(h.l1)}</td><td class="${cls(h.l2)}">${fmt(h.l2)}</td>
+     <td>${fmt(h.combined_avg,3)}</td><td>${h.regime}</td></tr>`).join('');
+  $('notes').innerHTML=s.notes.map(n=>`<div>${n}</div>`).join('');
+}
+
+function equity(s){
+  const c=$('equity'),ctx=c.getContext('2d');
+  c.width=c.clientWidth;ctx.clearRect(0,0,c.width,c.height);
+  const pts=s.equity;if(pts.length<2)return;
+  const vs=pts.map(p=>p[1]),min=Math.min(0,...vs),max=Math.max(0.01,...vs);
+  const x=i=>i/(pts.length-1)*(c.width-4)+2, y=v=>c.height-4-(v-min)/(max-min)*(c.height-8);
+  ctx.strokeStyle='#30363d';ctx.beginPath();ctx.moveTo(0,y(0));ctx.lineTo(c.width,y(0));ctx.stroke();
+  ctx.strokeStyle=vs[vs.length-1]>=0?'#3fb950':'#f85149';ctx.lineWidth=1.5;ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(x(i),y(p[1])):ctx.moveTo(x(i),y(p[1])));ctx.stroke();
+}
+
+function render(s){
+  $('mode').textContent=s.mode.toUpperCase();
+  $('mode').className='badge '+s.mode;
+  const st=$('state');
+  if(s.halted){st.style.display='';st.className='badge halted';st.textContent='HALTED: '+(s.halt_reason||'')}
+  else if(s.paused){st.style.display='';st.className='badge paused';st.textContent='PAUSED'}
+  else st.style.display='none';
+  chips(s);cards(s);tape(s);equity(s);
+}
+
+async function ctl(a){await fetch('/api/control/'+a,{method:'POST'})}
+
+function connect(){
+  const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onopen=()=>$('conn').textContent='● live';
+  ws.onmessage=e=>render(JSON.parse(e.data));
+  ws.onclose=()=>{$('conn').textContent='○ reconnecting…';setTimeout(connect,2000)};
+}
+connect();
+</script>
+</body>
+</html>

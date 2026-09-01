@@ -1,0 +1,92 @@
+"""Market lifecycle: strike capture at window open, resolution at window close."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+from bot.models import Side
+from bot.state import ResolvedCycle
+
+log = logging.getLogger("lifecycle")
+
+STRIKE_GRACE_S = 5        # how late we may still capture the open price
+RESOLVE_DELAY_S = 3       # settle a moment after close so the last spot bar lands
+
+
+class Lifecycle:
+    def __init__(self, settings, hub, spot_states, executor, recorder, risk) -> None:
+        self.s = settings
+        self.hub = hub
+        self.spots = spot_states
+        self.executor = executor
+        self.recorder = recorder
+        self.risk = risk
+
+    async def run(self) -> None:
+        while True:
+            await asyncio.sleep(0.5)
+            now = time.time()
+            for rt in list(self.hub.markets.values()):
+                self._capture_strike(rt, now)
+                self._resolve(rt, now)
+            self._prune(now)
+
+    def _capture_strike(self, rt, now: float) -> None:
+        m = rt.market
+        if m.strike is not None or rt.skipped or now < m.start_ts:
+            return
+        spot = self.spots.get(m.asset)
+        if now - m.start_ts <= STRIKE_GRACE_S and spot and spot.price and spot.stale < 2:
+            m.strike = spot.price
+            self.recorder.log("strike", {"market_id": m.condition_id, "strike": m.strike})
+            self.hub.note(f"{m.asset} {m.duration_s // 60}m window open @ {m.strike:.2f}")
+        elif now - m.start_ts > STRIKE_GRACE_S:
+            rt.skipped = "joined late — no reliable open price"
+            self.recorder.log("skip", {"market_id": m.condition_id, "why": rt.skipped})
+
+    def _resolve(self, rt, now: float) -> None:
+        m = rt.market
+        if rt.resolved or now < m.end_ts + RESOLVE_DELAY_S:
+            return
+        rt.resolved = True
+        self.executor.cancel_market(m.condition_id, "window closed")
+        if m.strike is None or rt.position.total_shares == 0:
+            self.hub.markets.pop(m.condition_id, None)
+            return
+        spot = self.spots.get(m.asset)
+        close = spot.price if spot else None
+        if close is None:
+            self.hub.note(f"{m.slug[:40]}: no close price, cannot settle — check manually")
+            return
+        # NOTE: settles on Binance spot as an oracle PROXY. The real oracle can disagree;
+        # oracle-mismatch measurement is a backtest report item.
+        winner = Side.YES if close >= m.strike else Side.NO
+        pnl = rt.position.resolution_pnl(winner)
+        layers = rt.position.layer_pnl(winner)
+        rt.winner, rt.resolution_pnl, rt.layer_pnl = winner, pnl, layers
+        self.hub.book_pnl(pnl)
+        self.hub.history.append(ResolvedCycle(
+            market=m, winner=winner, pnl=pnl, layer_pnl=layers,
+            combined_avg=rt.position.combined_avg, matched=rt.position.matched,
+            skew_side=rt.position.skew_side.value if rt.position.skew_side else None,
+            skew_shares=rt.position.skew_shares,
+            regime=rt.regime.label if rt.regime else "-",
+            fills=len(rt.position.fills), resolved_ts=now,
+        ))
+        self.recorder.log("resolved", {
+            "market_id": m.condition_id, "winner": winner.value, "close": close,
+            "strike": m.strike, "pnl": round(pnl, 4),
+            "l1": round(layers[1], 4), "l2": round(layers[2], 4),
+            "combined_avg": rt.position.combined_avg,
+            "regime": rt.regime.label if rt.regime else "-",
+        })
+        self.hub.note(f"resolved {m.asset} {m.duration_s // 60}m -> {winner.value} "
+                      f"pnl {pnl:+.2f} (L1 {layers[1]:+.2f} / L2 {layers[2]:+.2f})")
+        if self.s.mode == "live":
+            self.hub.note("live mode: redeem winnings in the Polymarket UI (auto-redeem TODO)")
+
+    def _prune(self, now: float) -> None:
+        for cid, rt in list(self.hub.markets.items()):
+            if rt.resolved and now > rt.market.end_ts + 60:
+                self.hub.markets.pop(cid, None)

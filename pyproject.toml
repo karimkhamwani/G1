@@ -1,0 +1,24 @@
+[project]
+name = "polymarket-momentum-bot"
+version = "0.1.0"
+description = "Two-layer (paired accumulation + momentum skew) bot for Polymarket short-duration crypto markets"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "websockets>=12.0",
+    "aiohttp>=3.9",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+live = ["py-clob-client>=0.17"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
