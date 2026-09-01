@@ -134,8 +134,8 @@ class PaperExecutor:
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,
                     shares=shares, fee=fee, signal=i.signal, order_id=i.id)
-        self.hub.on_fill(fill)
-        self.recorder.log("fill", fill.as_dict())
+        rec = self.hub.on_fill(fill)
+        self.recorder.log("fill", rec)
         log.info("FILL %s %s %.1f @ %.3f (%s)", i.action.value, i.side.value, shares, price, i.signal.value)
 
     def _cancel(self, order: Order, why: str, expired: bool = False) -> None:

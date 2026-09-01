@@ -87,7 +87,7 @@ button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
     <div class="panel">
       <h2>Fills tape <a href="/api/trades.csv" style="color:var(--blue);font-size:10px">all trades csv ↓</a></h2>
       <div class="scroll"><table class="list" id="fills">
-        <thead><tr><th>time</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>signal</th></tr></thead>
+        <thead><tr><th>market</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>signal</th></tr></thead>
         <tbody></tbody></table></div>
     </div>
     <div class="panel" style="margin-top:12px">
@@ -161,7 +161,8 @@ function cards(s){
 
 function tape(s){
   $('fills').tBodies[0].innerHTML=s.fills.map(f=>
-    `<tr><td>${hhmm(f.ts)}</td><td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
+    `<tr><td>${f.market||(f.market_id||'').slice(0,12)}</td>
+     <td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
      <td>${f.side}</td><td>${fmt(f.price,3)}</td><td>${f.shares}</td>
      <td class="dim">${f.signal.replace('_',' ').toLowerCase()}</td></tr>`).join('');
   $('history').tBodies[0].innerHTML=s.history.slice().reverse().map(h=>

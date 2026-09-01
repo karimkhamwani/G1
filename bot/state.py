@@ -64,11 +64,20 @@ class Hub:
         return sum(1 for rt in self.markets.values()
                    if not rt.resolved and rt.position.total_shares > 0)
 
-    def on_fill(self, fill: Fill) -> None:
+    def on_fill(self, fill: Fill) -> dict:
+        """Apply the fill and return its enriched record (with a short market label)
+        — executors log this exact record to the trade log."""
         rt = self.markets.get(fill.market_id)
+        rec = fill.as_dict()
         if rt:
             rt.position.apply_fill(fill)
-        self.fills.appendleft(fill.as_dict())
+            m = rt.market
+            rec["market"] = (f"{m.asset} {m.duration_s // 60}m "
+                             f"{time.strftime('%H:%M', time.localtime(m.start_ts))}")
+        else:
+            rec["market"] = fill.market_id[:12]
+        self.fills.appendleft(rec)
+        return rec
 
     def book_pnl(self, amount: float) -> None:
         self.session_pnl += amount

@@ -174,8 +174,8 @@ class LiveExecutor:
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,
                     shares=size, fee=fee, signal=i.signal, order_id=i.id)
-        self.hub.on_fill(fill)
-        self.recorder.log("fill", fill.as_dict())
+        rec = self.hub.on_fill(fill)
+        self.recorder.log("fill", rec)
         log.info("LIVE FILL %s %s %.1f @ %.3f", i.action.value, i.side.value, size, price)
 
     # ---- ttl + fast-cancel sweep ------------------------------------------
