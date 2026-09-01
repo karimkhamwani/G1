@@ -71,9 +71,7 @@ class Hub:
         rec = fill.as_dict()
         if rt:
             rt.position.apply_fill(fill)
-            m = rt.market
-            rec["market"] = (f"{m.asset} {m.duration_s // 60}m "
-                             f"{time.strftime('%H:%M', time.localtime(m.start_ts))}")
+            rec["market"] = rt.market.question or rt.market.slug
         else:
             rec["market"] = fill.market_id[:12]
         self.fills.appendleft(rec)

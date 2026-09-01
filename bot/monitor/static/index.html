@@ -161,7 +161,7 @@ function cards(s){
 
 function tape(s){
   $('fills').tBodies[0].innerHTML=s.fills.map(f=>
-    `<tr><td>${f.market||(f.market_id||'').slice(0,12)}</td>
+    `<tr><td style="max-width:150px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${f.market||''}">${f.market||(f.market_id||'').slice(0,12)}</td>
      <td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
      <td>${f.side}</td><td>${fmt(f.price,3)}</td><td>${f.shares}</td>
      <td class="dim">${f.signal.replace('_',' ').toLowerCase()}</td></tr>`).join('');
