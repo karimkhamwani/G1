@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     skew_step_shares: float = 10
     max_skew_shares: float = 40
     book_imbalance_min: float = 0.2
-    max_skew_price: float = 0.85        # never buy skew above this (poor risk/reward + fee)
 
     # risk
     max_shares_per_market: float = 120

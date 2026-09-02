@@ -223,9 +223,6 @@ class SignalEngine:
         # showed a sell @0.90 followed by a rebuy @0.91 — pure fee churn)
         if pos.tp_taken:
             return []
-        # price cap: never chase the skew into the extremes (risk 91c to win 9c)
-        if top.ask > self.s.max_skew_price:
-            return []
         if self._pending(m.condition_id, side) > 0.5:
             return []      # skew order already working — don't double-fire
         # skew must clear fees too

@@ -191,14 +191,9 @@ def test_divergence_clamp_blocks_adds():
     assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
 
 
-def test_skew_price_cap_and_tp_churn_guard():
+def test_skew_tp_churn_guard():
     chop = [100_000, 100_080, 99_930, 100_060, 100_010]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    # confluence YES but ask 0.91 > MAX_SKEW_PRICE -> no skew
-    _, _, rt, ex, eng = make_env_exec(chop, 100_400, top(0.89, 0.91, 900, 100),
-                                      top(0.08, 0.10, 100, 900), fills, drift=5e-6)
-    eng.evaluate(rt)
-    assert not [i for i in ex.intents if i.signal is SignalType.SKEW]
     # confluence + sane price, but TP already fired once -> churn guard blocks rebuy
     _, _, rt2, ex2, eng2 = make_env_exec(chop, 100_150, top(0.55, 0.57, 900, 100),
                                          top(0.43, 0.45, 100, 900), fills, drift=3e-6)
