@@ -41,8 +41,20 @@ class LiveExecutor:
             from py_clob_client.client import ClobClient
         except ImportError as e:
             raise RuntimeError("MODE=live requires py-clob-client: pip install '.[live]'") from e
+        kwargs: dict = {}
+        if self.s.polymarket_funder_address:
+            # Polymarket UI accounts hold funds in a proxy wallet: orders are signed by
+            # the exported key but funded/settled by the proxy ("funder") address.
+            # signature_type 1 = email/Magic login, 2 = browser-wallet (Gnosis safe).
+            kwargs["signature_type"] = self.s.polymarket_signature_type
+            kwargs["funder"] = self.s.polymarket_funder_address
+            log.info("proxy-wallet mode: funder=%s signature_type=%s",
+                     self.s.polymarket_funder_address, self.s.polymarket_signature_type)
+        else:
+            log.info("EOA mode: trading directly from the key's own address")
         self.client = ClobClient(
-            self.s.clob_host, key=self.s.polygon_wallet_private_key, chain_id=self.s.chain_id,
+            self.s.clob_host, key=self.s.polygon_wallet_private_key,
+            chain_id=self.s.chain_id, **kwargs,
         )
         if self.s.polymarket_api_key:
             from py_clob_client.clob_types import ApiCreds

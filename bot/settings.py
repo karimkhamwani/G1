@@ -82,6 +82,8 @@ class Settings(BaseSettings):
 
     # credentials
     polygon_wallet_private_key: str = ""
+    polymarket_funder_address: str = ""   # proxy wallet holding the funds (Polymarket UI account)
+    polymarket_signature_type: int = 1    # 1 = email/Magic login proxy, 2 = browser-wallet proxy
     polymarket_api_key: str = ""
     polymarket_api_secret: str = ""
     polymarket_api_passphrase: str = ""

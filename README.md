@@ -81,9 +81,13 @@ the untouched second half.**
 .venv\Scripts\pip install -e .[live]
 ```
 
-Set in `.env`: `MODE=live`, `POLYGON_WALLET_PRIVATE_KEY` (a dedicated hot wallet with
-only working capital). API creds are derived from the key on first run (L2 auth).
-Orders go through the Polymarket CLOB v2 API; fills stream from the user channel.
+Set in `.env`: `MODE=live`, `POLYGON_WALLET_PRIVATE_KEY`, and — for a normal Polymarket
+account (funds deposited via the website) — `POLYMARKET_FUNDER_ADDRESS`, your deposit
+address shown in the Polymarket UI. `POLYMARKET_SIGNATURE_TYPE=1` for accounts created
+with email/Magic login (the default), `2` for accounts connected via a browser wallet
+(MetaMask etc.). Leave the funder empty only if you trade from a raw EOA wallet that
+holds its own USDC. API creds are derived from the key on first run (L2 auth). Orders
+go through the Polymarket CLOB v2 API; fills stream from the user channel.
 
 Not yet automated: on-chain redemption of resolved winnings — redeem via the
 Polymarket UI (the bot logs a reminder at each resolution).
