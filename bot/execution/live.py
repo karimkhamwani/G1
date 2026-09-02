@@ -34,6 +34,8 @@ class LiveExecutor:
         self.orders: dict[str, Order] = {}   # exchange order id -> Order
         self.client = None
         self.creds = None
+        self._consec_errors = 0
+        self._cooldown_until = 0.0
         self._init_client()
 
     def _init_client(self) -> None:
@@ -68,6 +70,8 @@ class LiveExecutor:
 
     # ---- interface (same as PaperExecutor) --------------------------------
     def submit(self, intent: OrderIntent) -> None:
+        if time.time() < self._cooldown_until:
+            return   # placement errors are hot — don't machine-gun the API
         asyncio.get_running_loop().create_task(self._place(intent))
 
     def cancel_market(self, market_id: str, why: str = "") -> int:
@@ -121,14 +125,22 @@ class LiveExecutor:
             order = Order(intent=intent, status=OrderStatus.RESTING,
                           spot_at_place=spot.price if spot else None, exchange_id=oid)
             self.orders[oid] = order
+            self._consec_errors = 0
             self.recorder.log("order", {"id": intent.id, "exchange_id": oid,
                                         "market_id": intent.market_id, "side": intent.side.value,
                                         "action": intent.action.value, "price": intent.price,
                                         "shares": intent.shares, "signal": intent.signal.value,
                                         "status": "RESTING"})
         except Exception as e:  # noqa: BLE001
-            log.error("order placement failed: %s", e)
-            self.recorder.log("order_error", {"id": intent.id, "error": str(e)[:200]})
+            self._consec_errors += 1
+            self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)
+            log.error("order placement failed (%d consecutive): %s", self._consec_errors, e)
+            self.recorder.log("order_error", {"id": intent.id, "error": str(e)[:200],
+                                              "consecutive": self._consec_errors})
+            if self._consec_errors >= 10 and not self.hub.paused:
+                self.hub.paused = True
+                self.hub.note(f"AUTO-PAUSED: {self._consec_errors} consecutive order errors "
+                              f"({str(e)[:80]}) - fix the cause, then resume from the dashboard")
 
     async def _cancel(self, exchange_id: str, why: str) -> None:
         loop = asyncio.get_running_loop()
