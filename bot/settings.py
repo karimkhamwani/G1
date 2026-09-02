@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     entry_window_s: int = 30
     repair_max_slip: float = 0.03       # abandon a base leg repair rather than chase this far
     add_trigger_drop: float = 0.05
-    add_margin: float = 0.03
     add_step_shares: float = 10
     add_jitter_pct: float = 0.25
     chop_score_min: float = 2.0
@@ -68,8 +67,6 @@ class Settings(BaseSettings):
     min_book_depth_usdc: float = 200
     take_profit_levels: str = "0.90,0.97"
     fast_cancel_spot_move: float = 0.0008
-    fee_refresh_min: int = 30
-    default_fee_bps: float = 1000       # assumed when the fee fetch fails or returns 0
     paper_latency_ms: int = 300
 
     # endpoints

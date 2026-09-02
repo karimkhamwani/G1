@@ -103,9 +103,9 @@ def test_model_gate_blocks_fairly_priced_dip():
     fair_no = 1 - rt.fair_yes
     assert not rt.regime.trending
     adds = [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
-    for a in adds:  # any add that did fire must have cleared the margin vs fair
+    for a in adds:  # any add that did fire must have been below fair value
         side_fair = rt.fair_yes if a.side is Side.YES else fair_no
-        assert a.price <= side_fair - 0.02
+        assert a.price < side_fair
 
 
 def test_add_fires_when_all_gates_pass():

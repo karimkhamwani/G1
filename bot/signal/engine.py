@@ -10,7 +10,7 @@ import random
 import time
 
 from bot.models import Action, OrderIntent, Side, SignalType
-from bot.signal.fair_value import effective_cost, fair_yes
+from bot.signal.fair_value import fair_yes
 from bot.signal.regime import classify
 
 log = logging.getLogger("signal")
@@ -209,8 +209,9 @@ class SignalEngine:
             # trigger: ask meaningfully below our own average
             if top.ask > avg - self.s.add_trigger_drop:
                 continue
-            # model gate: also cheap vs fair value, net of taker fee
-            if effective_cost(top.ask, m.taker_fee_bps) > fair_of[side] - self.s.add_margin:
+            # model gate: the ask must also be below fair value (no extra margin —
+            # fees and edge headroom are the trader's concern, not modeled here)
+            if top.ask >= fair_of[side]:
                 continue
             step = self.s.add_step_shares * (decay ** pos.adds_used[side])
             step *= 1.0 + self.rng.uniform(-self.s.add_jitter_pct, self.s.add_jitter_pct)
@@ -272,8 +273,9 @@ class SignalEngine:
             return []
         if self._pending(m.condition_id, side) > 0.5:
             return []      # skew order already working — don't double-fire
-        # skew must clear fees too
-        if effective_cost(top.ask, m.taker_fee_bps) >= fair_of[side]:
+        # the ask must still be below fair value (fees are not modeled — keep
+        # SKEW_THRESHOLD wide enough to cover them)
+        if top.ask >= fair_of[side]:
             return []
         step = self.s.skew_step_shares * (1.0 + self.rng.uniform(-self.s.add_jitter_pct,
                                                                  self.s.add_jitter_pct))

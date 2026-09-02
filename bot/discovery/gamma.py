@@ -1,4 +1,5 @@
-"""Market discovery via the Gamma API + fee schedule from the CLOB v2 REST API.
+"""Market discovery via the Gamma API. (Fees are not modeled — Polymarket settles
+them on-chain; entry margins must cover them.)
 
 Polymarket's short-duration crypto markets have deterministic slugs:
     {asset}-updown-{5m|15m}-{window_start_unix}     e.g. btc-updown-5m-1788289500
@@ -41,7 +42,6 @@ class Discovery:
         self.recorder = recorder
         self.on_new_market = on_new_market  # callback(Market)
         self._seen: set[str] = set()
-        self._fees: dict[str, tuple[float, float, float]] = {}  # cid -> (ts, maker, taker)
 
     def _candidate_slugs(self, now: float) -> list[tuple[str, str, int, int]]:
         """(slug, asset, duration_s, window_start) for current + next window of each series."""
@@ -81,17 +81,14 @@ class Discovery:
                 self._seen.add(slug)
                 continue
             self._seen.add(slug)
-            maker, taker = await self._fetch_fees(http, m.condition_id)
-            m.maker_fee_bps, m.taker_fee_bps = maker, taker
             self.recorder.log("market_discovered", {
                 "condition_id": m.condition_id, "slug": m.slug, "question": m.question,
                 "asset": m.asset, "duration_s": m.duration_s,
                 "start_ts": m.start_ts, "end_ts": m.end_ts,
                 "token_yes": m.token[Side.YES], "token_no": m.token[Side.NO],
-                "maker_fee_bps": maker, "taker_fee_bps": taker,
             })
-            log.info("new market: %s (%s %ss, taker %.0fbps, opens in %.0fs)",
-                     slug, asset, dur, taker, m.start_ts - now)
+            log.info("new market: %s (%s %ss, opens in %.0fs)",
+                     slug, asset, dur, m.start_ts - now)
             self.on_new_market(m)
 
     async def _fetch_market(self, http, slug: str, asset: str, dur: int) -> Market | None:
@@ -133,32 +130,3 @@ class Discovery:
             asset=asset, duration_s=dur, start_ts=start, end_ts=end,
             token={Side.YES: str(tokens[yes_idx]), Side.NO: str(tokens[1 - yes_idx])},
         )
-
-    async def _fetch_fees(self, http: aiohttp.ClientSession, condition_id: str) -> tuple[float, float]:
-        cached = self._fees.get(condition_id)
-        if cached and time.time() - cached[0] < self.s.fee_refresh_min * 60:
-            return cached[1], cached[2]
-        maker = taker = None
-        fetched = False
-        try:
-            url = f"{self.s.clob_host}/markets/{condition_id}"
-            async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    maker = float(data.get("maker_base_fee") or 0)
-                    taker = float(data.get("taker_base_fee") or 0)
-                    fetched = True   # the exchange answered; believe what it said
-                else:
-                    log.warning("fee fetch %s -> HTTP %s", condition_id[:10], resp.status)
-        except Exception as e:  # noqa: BLE001
-            log.warning("fee fetch failed for %s: %s", condition_id[:10], e)
-        # A successful response saying 0 means the market IS free — most Polymarket
-        # markets are. Only substitute the conservative default when the fetch itself
-        # failed; assuming 1000bps on a real 0 poisoned every fee-gated decision.
-        if not fetched:
-            log.warning("fee for %s unavailable - assuming %.0f bps (DEFAULT_FEE_BPS)",
-                        condition_id[:10], self.s.default_fee_bps)
-            taker = self.s.default_fee_bps
-            maker = self.s.default_fee_bps if maker is None else maker
-        self._fees[condition_id] = (time.time(), maker, taker)
-        return maker, taker

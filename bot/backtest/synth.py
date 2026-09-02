@@ -3,7 +3,7 @@
 Produces data in the exact recorder JSONL format: BTC 5m/15m up-down windows with a
 mix of choppy (OU mean-reverting) and trending (drifting) regimes, an order book that
 tracks fair value with a lag (the inefficiency the strategy hunts), spreads, depth
-imbalance aligned with the trend, trade prints, and the real 1000 bps taker fee.
+imbalance aligned with the trend, and trade prints. Fees are not modeled.
 
 Usage:
     python -m bot.backtest.synth data/synth --hours 6 --seed 42
@@ -24,7 +24,6 @@ SPREAD = 0.03
 TICK = 0.01
 TREND_DRIFT = 3.5e-5    # per-second drift in trending windows
 CHOP_THETA = 0.05       # OU pull toward strike in choppy windows
-FEE_BPS = 1000.0        # real taker fee observed on these markets
 
 
 def q(p: float) -> float:
@@ -78,7 +77,7 @@ def generate(out_dir: Path, hours: float, seed: int) -> Path:
                        "asset": "BTC", "duration_s": m["dur"],
                        "start_ts": m["start"], "end_ts": m["end"],
                        "token_yes": m["ty"], "token_no": m["tn"],
-                       "maker_fee_bps": 0.0, "taker_fee_bps": FEE_BPS})
+                       })
         events.append({"ts": m["start"] + 0.5, "type": "strike",
                        "market_id": m["cid"], "strike": spot(m["start"])})
         events.append({"ts": m["end"] + 1, "type": "resolved", "market_id": m["cid"],

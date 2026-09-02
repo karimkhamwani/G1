@@ -14,7 +14,6 @@ import logging
 import time
 
 from bot.models import Action, Fill, Order, OrderIntent, OrderStatus, Side
-from bot.signal.fair_value import effective_cost
 
 log = logging.getLogger("paper")
 
@@ -151,9 +150,7 @@ class PaperExecutor:
         if shares <= 0:
             return
         i = order.intent
-        rt = self.hub.markets.get(i.market_id)
-        fee_bps = rt.market.taker_fee_bps if (rt and taker) else (rt.market.maker_fee_bps if rt else 0.0)
-        fee = (effective_cost(price, fee_bps) - price) * shares
+        fee = 0.0   # fees are not modeled; Polymarket settles them on-chain
         order.filled_shares += shares
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,

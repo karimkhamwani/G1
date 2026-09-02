@@ -1,4 +1,4 @@
-from bot.signal.fair_value import effective_cost, fair_yes, norm_cdf
+from bot.signal.fair_value import fair_yes, norm_cdf
 
 
 def test_cdf_symmetry():
@@ -29,12 +29,6 @@ def test_positive_drift_lifts_fair():
 def test_expiry_is_binary():
     assert fair_yes(100_001, 100_000, 1e-4, 0.0, 0) == 1.0
     assert fair_yes(99_999, 100_000, 1e-4, 0.0, 0) == 0.0
-
-
-def test_effective_cost_adds_fee_on_cheap_side():
-    assert effective_cost(0.30, 0) == 0.30
-    assert effective_cost(0.30, 100) == 0.30 + 0.01 * 0.30
-    assert effective_cost(0.70, 100) == 0.70 + 0.01 * 0.30  # fee scales with min(p, 1-p)
 
 
 def test_tie_resolves_down():

@@ -1,4 +1,4 @@
-"""Base-leg repair must not chase, and a real zero fee must be believed."""
+"""Base-leg repair must not chase."""
 import time
 
 from bot.models import BookTop, Market, Side
@@ -42,16 +42,6 @@ def test_repair_allowed_within_slippage_budget():
     intents = eng._base_leg_repair(rt, time.time())
     assert [i.side for i in intents] == [Side.NO]
     assert intents[0].price == 0.54
-
-
-def test_zero_fee_from_a_successful_fetch_is_believed():
-    """taker_base_fee=0 is the truth for most markets; assuming 1000bps poisoned
-    every fee-gated decision and inflated recorded cost by ~12%."""
-    import inspect
-    from bot.discovery import gamma
-    src = inspect.getsource(gamma)
-    assert "fetched = True" in src
-    assert "if not fetched:" in src, "default must apply only when the fetch failed"
 
 
 def test_skew_disabled_never_opens_layer_2():

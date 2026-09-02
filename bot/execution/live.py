@@ -336,9 +336,7 @@ class LiveExecutor:
         if order is None or size <= 0:
             return
         i = order.intent
-        rt = self.hub.markets.get(i.market_id)
-        fee_bps = rt.market.taker_fee_bps if rt else 0.0
-        fee = (fee_bps / 10_000.0) * min(price, 1 - price) * size
+        fee = 0.0   # fees are not modeled; Polymarket settles them on-chain
         order.filled_shares += size
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,

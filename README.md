@@ -11,9 +11,10 @@ Two-layer bot for Polymarket's short-duration (5m/15m) BTC/ETH up-or-down market
 Full design, strategy math, failure modes, and validation gates: [plan.md](plan.md).
 **Read §8 (Validation & Go-Live Gate) before considering live mode.**
 
-> ⚠ Real-world fee check (2026-09): these markets report a **1000 bps (10%) taker base
-> fee** — fee = 0.10 × min(p, 1−p) per share. All edge math in the bot is net of this,
-> which will veto many marginal trades. That is correct behavior, not a bug.
+> ⚠ **Fees are not modeled.** Polymarket settles its fees on-chain; the bot's entry
+> thresholds (`ADD_TRIGGER_DROP`, `SKEW_THRESHOLD`) are the only edge headroom.
+> Paper/backtest P&L therefore overstates live results by roughly the fee — the live
+> wallet balance is the ground truth.
 
 ## Setup — Windows
 

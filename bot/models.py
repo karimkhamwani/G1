@@ -46,8 +46,6 @@ class Market:
     end_ts: float
     token: dict[Side, str]   # Side -> CLOB token id
     strike: float | None = None      # spot at window open (captured live)
-    taker_fee_bps: float = 0.0
-    maker_fee_bps: float = 0.0
 
     def side_of_token(self, token_id: str) -> Side | None:
         for s, t in self.token.items():

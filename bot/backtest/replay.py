@@ -21,7 +21,6 @@ from bot.execution.tracker import Position
 from bot.models import Action, BookTop, Fill, Market, OrderIntent, Side, SignalType
 from bot.settings import Settings
 from bot.signal.engine import SignalEngine
-from bot.signal.fair_value import effective_cost
 from bot.state import Hub, MarketRuntime
 
 
@@ -151,10 +150,8 @@ class SimExecutor:
         shares = min(remaining, max(cap, 1.0)) if cap is not None else remaining
         if shares <= 0:
             return
-        rt = self.hub.markets[i.market_id]
-        fee = (effective_cost(price, rt.market.taker_fee_bps) - price) * shares
         self.hub.on_fill(Fill(market_id=i.market_id, side=i.side, action=i.action,
-                              price=price, shares=shares, fee=fee, signal=i.signal,
+                              price=price, shares=shares, fee=0.0, signal=i.signal,
                               ts=self.now, order_id=i.id))
         self.filled_orders += 1
         r["filled"] += shares
@@ -241,9 +238,7 @@ def run(paths: list[Path]) -> dict:
                                question=ev["question"], asset=ev["asset"],
                                duration_s=ev["duration_s"], start_ts=ev["start_ts"],
                                end_ts=ev["end_ts"],
-                               token={Side.YES: ev["token_yes"], Side.NO: ev["token_no"]},
-                               taker_fee_bps=ev.get("taker_fee_bps", 0),
-                               maker_fee_bps=ev.get("maker_fee_bps", 0))
+                               token={Side.YES: ev["token_yes"], Side.NO: ev["token_no"]})
                     hub.markets[m.condition_id] = MarketRuntime(market=m)
                 elif t == "strike":
                     rt = hub.markets.get(ev["market_id"])

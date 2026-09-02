@@ -26,6 +26,6 @@ def fair_yes(spot: float, strike: float, sigma_s: float, drift_s: float, t_rem_s
     return norm_cdf(num / den)
 
 
-def effective_cost(price: float, fee_bps: float) -> float:
-    """Price plus Polymarket's fee, which scales with min(p, 1-p)."""
-    return price + (fee_bps / 10_000.0) * min(price, 1.0 - price)
+# NOTE: fees are deliberately NOT modeled. Polymarket settles them on-chain; entry
+# thresholds (ADD_TRIGGER_DROP, SKEW_THRESHOLD) are the only edge headroom, and live
+# wallet balance is the ground truth for realized P&L.

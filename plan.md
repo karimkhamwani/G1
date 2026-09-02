@@ -66,8 +66,8 @@ Two gates protect Layer 1 from its own failure mode (buying the losing side just
 because it got cheap):
 
 - **Model gate** — an add fires only if the side is also cheap *versus fair value*
-  (`ask ≤ fair_side − add_margin`), not merely below our own average cost. A falling
-  price that the model agrees with is a losing side at a fair price; skip it.
+  (`ask < fair_side`), not merely below our own average cost. A falling price that the
+  model agrees with is a losing side at a fair price; skip it.
 - **Regime gate** — a live chop/trend classifier per window
   (`chop_score = price range ÷ |net move|` over the window so far, plus drift
   persistence). Ladder adds are enabled only while the window classifies as choppy;
@@ -152,7 +152,7 @@ with all state journaled to disk.
      positioned before the window's swings, not to nail the first price.
   2. **`ScaleAddSignal`** — fires only when ALL of: (a) the side's best ask is at least
      `add_trigger_drop` below its running average cost, (b) **model gate**: the ask is
-     also below fair value by `add_margin` (fees included), (c) **regime gate**: the
+     also below fair value (fees are not modeled), (c) **regime gate**: the
      window currently classifies as choppy. Buys `add_step_shares` (± random jitter in
      size and price so the ladder doesn't telegraph a repeating pattern to the book).
      Governed by the duration-scaled ladder: at most `max_adds_per_side` adds, step
@@ -167,9 +167,9 @@ with all state journaled to disk.
 - **Regime classifier** — maintained per active window from spot ticks: chop score,
   drift persistence, and realized vol. Published with every signal so the backtest can
   split results by regime.
-- **All edge math includes fees** — taker/maker fees for these specific markets are
-  fetched from the CLOB API at startup (and re-checked periodically); every threshold
-  is applied net of fees, never gross.
+- **Fees are NOT modeled** — Polymarket settles them on-chain. Entry thresholds
+  (`ADD_TRIGGER_DROP`, `SKEW_THRESHOLD`) are the only edge headroom, and paper
+  P&L overstates live results by roughly the fee; the live wallet is the ground truth.
 - Vetoes applied to all signals: stale feed, book depth below floor, final-seconds
   blackout for new skew (pairs may still complete), max spread filter,
   `max_shares_per_market` cap.
@@ -225,7 +225,7 @@ Hard limits enforced outside the strategy logic (the strategy cannot override th
 - Replays recorded data through the *same* SignalEngine code (no reimplementation).
 - **Queue-realistic fill model**: a resting limit order fills only when the recorded
   book *trades through* its price level (not merely touches it), capped at traded
-  volume, with a 200–500 ms latency penalty and all fees included. Paper mode uses the
+  volume, with a 200–500 ms latency penalty (fees not modeled). Paper mode uses the
   same fill model live.
 - Models capital lockup from redemption delays (caps concurrent cycles).
 - **Walk-forward validation**: parameters may be tuned only on the first half of the
@@ -335,7 +335,6 @@ FINAL_BLACKOUT_S=20                # no new skew entries in last N seconds
 BASE_SHARES=20                     # initial equal YES+NO position per market
 ENTRY_WINDOW_S=30                  # place base entry within N seconds of market open
 ADD_TRIGGER_DROP=0.05              # add to a side when ask < that side's avg_cost − this
-ADD_MARGIN=0.03                    # model gate: ask must also be ≤ fair − this (net of fees)
 ADD_STEP_SHARES=10                 # shares per averaging add
 ADD_JITTER_PCT=0.25                # randomize step size/price ±25% (don't telegraph the ladder)
 CHOP_SCORE_MIN=2.0                 # regime gate: range ÷ |net move| must exceed this for adds
@@ -367,7 +366,6 @@ ORDER_TTL_S=10
 MIN_BOOK_DEPTH_USDC=200
 TAKE_PROFIT_LEVELS=0.90,0.97
 FAST_CANCEL_SPOT_MOVE=0.0008       # pull resting bids if spot moves this fraction against them
-FEE_REFRESH_MIN=30                 # re-fetch market fee schedule every N minutes
 
 # ── Endpoints (Polymarket CLOB v2) ───────────────────────────
 CLOB_HOST=https://clob.polymarket.com     # CLOB v2 REST (orders, cancels, balances)
@@ -404,13 +402,15 @@ startup — bad or missing values fail fast before any connection is opened.
 The program must pass these gates **in order**; failure at any gate means stop or revise
 the model — never "tune until profitable" on the same dataset.
 
-0. **Pre-build viability check** (an afternoon, before writing the bot): confirm the
-   current fee schedule for 5m/15m crypto markets from the CLOB API, eyeball typical
+0. **Pre-build viability check** (an afternoon, before writing the bot): check what
+   fees Polymarket currently charges on 5m/15m crypto markets (they are settled
+   on-chain and NOT modeled by the bot — margins must cover them), eyeball typical
    spreads and book depth, and do the ROI arithmetic — max edge × windows/day ×
    achievable size − fees. If the best case is negligible, decide consciously whether
    this is a learning project or an income project before investing the build time.
 1. **Paper trade** ≥ 1–2 weeks — this simultaneously records the full feed corpus and
-   produces simulated P&L (queue-realistic fills, fees included).
+   produces simulated P&L (queue-realistic fills; fees not modeled — remember the
+   live wallet pays them).
 2. **Backtest** on the recorded data, walk-forward (tune on half, judge on the untouched
    half) → positive expectancy after all costs over ≥ 500 trades, drawdown within
    tolerance, **Layer 1 profitable in choppy windows and its trending-window bleed
