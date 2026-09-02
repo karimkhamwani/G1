@@ -1,7 +1,7 @@
-"""Live executor: Polymarket CLOB v2 via the official py-clob-client (L2 auth).
+"""Live executor: Polymarket CLOB v2 via the official py-clob-client-v2 (L2 auth).
 
 USE ONLY AFTER THE VALIDATION GATES IN plan.md PASS. Requires:
-    pip install '.[live]'
+    pip install '.[live]'      (installs py-clob-client-v2)
     POLYGON_WALLET_PRIVATE_KEY (+ optionally pre-derived API creds) in .env
 
 The client is synchronous, so calls run in a thread executor. Fills arrive via the
@@ -40,9 +40,9 @@ class LiveExecutor:
 
     def _init_client(self) -> None:
         try:
-            from py_clob_client.client import ClobClient
+            from py_clob_client_v2 import ApiCreds, ClobClient
         except ImportError as e:
-            raise RuntimeError("MODE=live requires py-clob-client: pip install '.[live]'") from e
+            raise RuntimeError("MODE=live requires py-clob-client-v2: pip install '.[live]'") from e
         kwargs: dict = {}
         if self.s.polymarket_funder_address:
             # Polymarket UI accounts hold funds in a proxy wallet: orders are signed by
@@ -55,18 +55,17 @@ class LiveExecutor:
         else:
             log.info("EOA mode: trading directly from the key's own address")
         self.client = ClobClient(
-            self.s.clob_host, key=self.s.polygon_wallet_private_key,
-            chain_id=self.s.chain_id, **kwargs,
+            host=self.s.clob_host, chain_id=self.s.chain_id,
+            key=self.s.polygon_wallet_private_key, **kwargs,
         )
         if self.s.polymarket_api_key:
-            from py_clob_client.clob_types import ApiCreds
             self.creds = ApiCreds(api_key=self.s.polymarket_api_key,
                                   api_secret=self.s.polymarket_api_secret,
                                   api_passphrase=self.s.polymarket_api_passphrase)
         else:
-            self.creds = self.client.create_or_derive_api_creds()
+            self.creds = self.client.create_or_derive_api_key()
         self.client.set_api_creds(self.creds)
-        log.info("CLOB v2 client ready (L2 auth)")
+        log.info("CLOB client ready (py-clob-client-v2, L2 auth)")
 
     # ---- interface (same as PaperExecutor) --------------------------------
     def submit(self, intent: OrderIntent) -> None:
@@ -103,19 +102,18 @@ class LiveExecutor:
 
     # ---- order placement ------------------------------------------------
     async def _place(self, intent: OrderIntent) -> None:
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY, SELL
+        from py_clob_client_v2 import OrderArgs, OrderType
         loop = asyncio.get_running_loop()
         args = OrderArgs(
             token_id=intent.token_id,
             price=round(intent.price, 3),
             size=round(intent.shares, 2),
-            side=BUY if intent.action is Action.BUY else SELL,
+            side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
         )
         try:
             signed = await loop.run_in_executor(None, self.client.create_order, args)
             resp = await loop.run_in_executor(
-                None, lambda: self.client.post_order(signed, OrderType.GTC))
+                None, lambda: self.client.post_order(signed, order_type=OrderType.GTC))
             oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
             if not oid:
                 log.warning("order rejected: %s", resp)
@@ -143,9 +141,11 @@ class LiveExecutor:
                               f"({str(e)[:80]}) - fix the cause, then resume from the dashboard")
 
     async def _cancel(self, exchange_id: str, why: str) -> None:
+        from py_clob_client_v2.clob_types import OrderPayload
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, self.client.cancel, exchange_id)
+            await loop.run_in_executor(
+                None, lambda: self.client.cancel_order(OrderPayload(orderID=exchange_id)))
         except Exception as e:  # noqa: BLE001
             log.warning("cancel %s failed: %s", exchange_id[:12], e)
         order = self.orders.get(exchange_id)

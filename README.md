@@ -81,6 +81,10 @@ the untouched second half.**
 .venv\Scripts\pip install -e .[live]
 ```
 
+(installs `py-clob-client-v2`, Polymarket's current official client — the original
+`py-clob-client` builds an outdated order format and gets rejected with
+"invalid order version")
+
 Set in `.env`: `MODE=live`, `POLYGON_WALLET_PRIVATE_KEY`, and — for a normal Polymarket
 account (funds deposited via the website) — `POLYMARKET_FUNDER_ADDRESS`, your deposit
 address shown in the Polymarket UI. `POLYMARKET_SIGNATURE_TYPE=1` for accounts created
