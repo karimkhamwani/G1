@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import OrderedDict
 
 import websockets
 
@@ -42,6 +43,9 @@ class LiveExecutor:
         self.creds = None
         self._consec_errors = 0
         self._cooldown_until = 0.0
+        # The user channel re-sends each trade as its status advances
+        # (MATCHED -> MINED -> CONFIRMED), so a fill must be booked exactly once.
+        self._seen_trades: OrderedDict[str, None] = OrderedDict()
         self._init_client()
 
     def _init_client(self) -> None:
@@ -259,8 +263,44 @@ class LiveExecutor:
                 log.warning("user channel error: %s - reconnecting", e)
                 await asyncio.sleep(2)
 
+    SEEN_TRADES_MAX = 5000
+
+    def _trade_key(self, ev: dict, oid: str) -> str | None:
+        """Stable identity for one (trade, our order) pair across status re-sends."""
+        tid = ev.get("id") or ev.get("trade_id") or ev.get("tradeID")
+        if tid:
+            return f"{tid}:{oid}"
+        # No trade id in this payload: fall back to the match time, which the
+        # re-sends preserve (our own arrival time would not).
+        ts = ev.get("match_time") or ev.get("matchtime") or ev.get("timestamp")
+        if ts:
+            return f"{oid}:{ts}:{ev.get('price')}:{ev.get('size')}"
+        return None
+
+    def _claim_trade(self, key: str | None, ev: dict) -> bool:
+        """True the first time a trade is seen; False for every re-send."""
+        if key is None:
+            # Cannot dedupe — book it, but record the payload so the schema can be fixed.
+            log.warning("trade event with no usable id — cannot dedupe: %s", str(ev)[:200])
+            self.recorder.log("trade_no_id", {"event": str(ev)[:400]})
+            return True
+        if key in self._seen_trades:
+            self.recorder.log("trade_duplicate", {"key": key, "status": ev.get("status")})
+            return False
+        self._seen_trades[key] = None
+        while len(self._seen_trades) > self.SEEN_TRADES_MAX:
+            self._seen_trades.popitem(last=False)
+        return True
+
     def _on_trade_event(self, ev: dict) -> None:
-        """Book fills whether our order was the taker or a maker in the trade."""
+        """Book fills whether our order was the taker or a maker in the trade.
+
+        Each trade is booked once: the channel repeats it as its status advances,
+        and a failed trade never settles at all.
+        """
+        if str(ev.get("status", "")).upper() == "FAILED":
+            self.recorder.log("trade_failed", {"id": str(ev.get("id"))[:64]})
+            return
         # taker side: our id in taker_order_id/order_id
         oid = ev.get("taker_order_id") or ev.get("order_id") or ""
         if oid in self.orders:
@@ -268,6 +308,8 @@ class LiveExecutor:
                 price = float(ev["price"])
                 size = float(ev.get("size") or ev.get("matched_amount") or 0)
             except (KeyError, ValueError, TypeError):
+                return
+            if not self._claim_trade(self._trade_key(ev, oid), ev):
                 return
             self._book_fill(oid, price, size)
             return
@@ -282,6 +324,8 @@ class LiveExecutor:
                 price = float(mo.get("price") or ev.get("price"))
                 size = float(mo.get("matched_amount") or mo.get("size") or 0)
             except (ValueError, TypeError):
+                continue
+            if not self._claim_trade(self._trade_key(ev, moid), ev):
                 continue
             self._book_fill(moid, price, size)
 
