@@ -146,7 +146,7 @@ class SignalEngine:
             pos.base_price[side] = top.ask
             intents.append(OrderIntent(
                 market_id=m.condition_id, token_id=m.token[side], side=side,
-                action=Action.BUY, price=top.ask, shares=self.s.base_shares,
+                action=Action.BUY, price=top.ask, shares=float(round(self.s.base_shares)),
                 signal=SignalType.BASE_ENTRY, reason="base two-sided entry",
             ))
         pos.base_placed = True
@@ -177,7 +177,7 @@ class SignalEngine:
             pos.base_retried[side] = True
             intents.append(OrderIntent(
                 market_id=m.condition_id, token_id=m.token[side], side=side,
-                action=Action.BUY, price=top.ask, shares=self.s.base_shares,
+                action=Action.BUY, price=top.ask, shares=float(round(self.s.base_shares)),
                 signal=SignalType.BASE_ENTRY,
                 reason="base leg repair (first order died unfilled)",
             ))
@@ -215,7 +215,9 @@ class SignalEngine:
                 continue
             step = self.s.add_step_shares * (decay ** pos.adds_used[side])
             step *= 1.0 + self.rng.uniform(-self.s.add_jitter_pct, self.s.add_jitter_pct)
-            shares = max(self.s.min_order_shares, round(step, 1))  # exchange minimum
+            # WHOLE shares: FAK buys require the USDC maker amount (price x size) to
+            # have <= 2 decimals; integer size x 2-decimal price guarantees that
+            shares = float(max(self.s.min_order_shares, round(step)))
             if pos.shares[side] + shares > self.s.max_shares_per_side:
                 continue
             price = round(top.ask * (1.0 + self.rng.uniform(0, 0.01)), 3)  # tiny price jitter
@@ -279,7 +281,7 @@ class SignalEngine:
             return []
         step = self.s.skew_step_shares * (1.0 + self.rng.uniform(-self.s.add_jitter_pct,
                                                                  self.s.add_jitter_pct))
-        shares = round(min(step, self.s.max_skew_shares - pos.skew_bought), 1)
+        shares = float(round(min(step, self.s.max_skew_shares - pos.skew_bought)))  # whole shares
         if shares < self.s.min_order_shares:
             return []   # remaining cap is below the exchange minimum order size
         # respect the per-side cap here instead of spamming risk vetoes
@@ -310,9 +312,10 @@ class SignalEngine:
             # first level sells half the skew, last level sells the rest —
             # bumped to the exchange minimum (a 2.5-share sell gets rejected)
             frac = 0.5 if i < len(self.s.tp_levels) - 1 else 1.0
-            shares = round(min(max(pos.skew_shares * frac, self.s.min_order_shares),
-                               pos.skew_shares), 1)
-            if shares < 1:
+            # whole shares, floored so we never sell more than we hold
+            shares = float(int(min(max(pos.skew_shares * frac, self.s.min_order_shares),
+                                   pos.skew_shares)))
+            if shares < self.s.min_order_shares:
                 continue
             intent = OrderIntent(
                 market_id=rt.market.condition_id, token_id=rt.market.token[side], side=side,

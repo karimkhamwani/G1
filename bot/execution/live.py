@@ -186,10 +186,13 @@ class LiveExecutor:
                 price = min(1.0 - tick, price + self.s.order_cross_ticks * tick)
             price = round(round(price / tick) * tick, 4)   # snap to the market's grid
             order_type = OrderType.FAK if is_buy else OrderType.GTC
+            # whole shares: FAK buys require the USDC maker amount (price x size) to
+            # have <= 2 decimals — integer size x on-grid price guarantees it
+            size = float(int(round(intent.shares))) if is_buy else round(intent.shares, 2)
             args = OrderArgs(
                 token_id=intent.token_id,
                 price=price,
-                size=round(intent.shares, 2),
+                size=size,
                 side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
             )
             # tick size + neg_risk come from discovery, so create_order signs locally
