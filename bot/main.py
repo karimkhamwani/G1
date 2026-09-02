@@ -26,7 +26,7 @@ class App:
         self.hub = Hub()
         self.hub.mode = self.settings.mode
         self.recorder = Recorder(self.settings.data_dir)
-        self.hub.load_trade_log(self.recorder.trades_path)
+        self.hub.load_trade_log(self.recorder.trades_path, mode=self.settings.mode)
         self.risk = RiskManager(self.settings, self.hub, self.recorder)
 
         if self.settings.mode == "live":
@@ -90,7 +90,12 @@ class App:
             await stop.wait()
         finally:
             log.info("shutting down: cancelling orders and flushing recorder")
-            self.executor.cancel_all("shutdown")
+            # await the exchange-side cancel — a fire-and-forget cancel would race
+            # loop teardown and could leave live GTC orders resting after exit
+            try:
+                await self.executor.aclose()
+            except Exception as e:  # noqa: BLE001
+                log.error("shutdown cancel failed: %s — check the exchange for orders", e)
             for t in [*tasks, *self._book_tasks.values()]:
                 t.cancel()
             await asyncio.gather(*tasks, *self._book_tasks.values(), return_exceptions=True)

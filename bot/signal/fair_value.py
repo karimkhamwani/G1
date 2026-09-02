@@ -18,7 +18,8 @@ def fair_yes(spot: float, strike: float, sigma_s: float, drift_s: float, t_rem_s
     if spot <= 0 or strike <= 0:
         return 0.5
     if t_rem_s <= 0:
-        return 1.0 if spot >= strike else 0.0
+        # tie rule: Up wins only if the close is strictly ABOVE the open
+        return 1.0 if spot > strike else 0.0
     sigma = max(sigma_s, MIN_SIGMA)
     num = math.log(spot / strike) + drift_s * t_rem_s
     den = sigma * math.sqrt(t_rem_s)

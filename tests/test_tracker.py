@@ -64,3 +64,39 @@ def test_layer_attribution():
     assert abs(layers[2] - (10 - 6.0)) < 1e-9    # skew: payout 10, cost 6
     layers_no = p.layer_pnl(Side.NO)
     assert abs(layers_no[2] - (0 - 6.0)) < 1e-9  # skew loses whole cost
+
+
+def test_cross_layer_sell_attribution_sums_to_total():
+    # L1 buys 20Y+20N; L2 buys 10Y; TP sells 15Y (more than L2 owns -> spills into L1)
+    p = Position()
+    p.apply_fill(buy(Side.YES, 0.50, 20))
+    p.apply_fill(buy(Side.NO, 0.50, 20))
+    p.apply_fill(buy(Side.YES, 0.60, 10, SignalType.SKEW))
+    sell = Fill(market_id="m", side=Side.YES, action=Action.SELL, price=0.90,
+                shares=15, fee=0.0, signal=SignalType.TAKE_PROFIT)
+    p.apply_fill(sell)
+    for winner in (Side.YES, Side.NO):
+        layers = p.layer_pnl(winner)
+        assert abs(sum(layers.values()) - p.resolution_pnl(winner)) < 1e-9, (winner, layers)
+
+
+def test_tp_level_rearms_when_order_dies_unfilled():
+    from bot.models import OrderIntent, Action as A
+    p = Position()
+    p.tp_taken.add(0.90)
+    intent = OrderIntent(market_id="m", token_id="t", side=Side.YES, action=A.SELL,
+                         price=0.90, shares=10, signal=SignalType.TAKE_PROFIT)
+    p.tp_pending[intent.id] = 0.90
+    p.order_closed(intent, 0.0)          # died unfilled -> re-armed
+    assert 0.90 not in p.tp_taken
+    # filled case: level stays consumed
+    p.tp_taken.add(0.90)
+    intent2 = OrderIntent(market_id="m", token_id="t", side=Side.YES, action=A.SELL,
+                          price=0.90, shares=10, signal=SignalType.TAKE_PROFIT)
+    p.tp_pending[intent2.id] = 0.90
+    fill = Fill(market_id="m", side=Side.YES, action=A.SELL, price=0.90, shares=10,
+                fee=0.0, signal=SignalType.TAKE_PROFIT, order_id=intent2.id)
+    p.apply_fill(buy(Side.YES, 0.5, 20, SignalType.SKEW))
+    p.apply_fill(fill)
+    p.order_closed(intent2, 10.0)        # closed after fill -> stays taken
+    assert 0.90 in p.tp_taken

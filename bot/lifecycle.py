@@ -11,6 +11,8 @@ log = logging.getLogger("lifecycle")
 
 STRIKE_GRACE_S = 5        # how late we may still capture the open price
 RESOLVE_DELAY_S = 3       # settle a moment after close so the last spot bar lands
+SETTLE_MAX_STALE_S = 5    # close price must be at most this old to settle
+SETTLE_TIMEOUT_S = 90     # give up waiting for a fresh price after this long
 
 
 class Lifecycle:
@@ -48,19 +50,37 @@ class Lifecycle:
         m = rt.market
         if rt.resolved or now < m.end_ts + RESOLVE_DELAY_S:
             return
-        rt.resolved = True
         self.executor.cancel_market(m.condition_id, "window closed")
         if m.strike is None or rt.position.total_shares == 0:
+            rt.resolved = True
             self.hub.markets.pop(m.condition_id, None)
             return
         spot = self.spots.get(m.asset)
-        close = spot.price if spot else None
-        if close is None:
-            self.hub.note(f"{m.slug[:40]}: no close price, cannot settle - check manually")
+        settlement = "spot_proxy"
+        if spot is None or spot.price is None or spot.stale > SETTLE_MAX_STALE_S:
+            # a stale price can pick the WRONG winner — wait for a fresh tick,
+            # and only give up after a timeout with a conservative worst case
+            if now < m.end_ts + SETTLE_TIMEOUT_S:
+                return   # not resolved yet — retry next tick
+            self.hub.note(f"{m.slug[:40]}: no fresh close price after "
+                          f"{SETTLE_TIMEOUT_S}s - booking worst case, check manually")
+            rt.resolved = True
+            winner = min(Side, key=lambda s: rt.position.shares[s])  # worst case: fewer-shares side wins
+            close = None
+            settlement = "no_price_worst_case"
+            self._settle(rt, now, winner, close, settlement)
             return
+        close = spot.price
+        rt.resolved = True
         # NOTE: settles on Binance spot as an oracle PROXY. The real oracle can disagree;
         # oracle-mismatch measurement is a backtest report item.
-        winner = Side.YES if close >= m.strike else Side.NO
+        # Tie rule: these markets resolve UP only if close is strictly ABOVE the open —
+        # a tie is Down/NO (plan.md: "closes above the window's open price").
+        winner = Side.YES if close > m.strike else Side.NO
+        self._settle(rt, now, winner, close, settlement)
+
+    def _settle(self, rt, now: float, winner: Side, close, settlement: str) -> None:
+        m = rt.market
         pnl = rt.position.resolution_pnl(winner)
         layers = rt.position.layer_pnl(winner)
         rt.winner, rt.resolution_pnl, rt.layer_pnl = winner, pnl, layers
@@ -81,6 +101,7 @@ class Lifecycle:
             "fees_paid": round(rt.position.fees_paid, 4),
             "regime": rt.regime.label if rt.regime else "-",
             "fills": len(rt.position.fills),
+            "settlement": settlement,
         }
         self.hub.history.append(record)
         self.recorder.log("resolved", {k: v for k, v in record.items() if k != "ts"})

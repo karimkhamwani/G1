@@ -17,23 +17,20 @@ class Position:
     skew_bought: float = 0.0                    # total layer-2 shares bought (gates the cap)
     skew_by_side: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     tp_taken: set[float] = field(default_factory=set)
+    tp_pending: dict[int, float] = field(default_factory=dict)  # intent.id -> level, until outcome known
     base_placed: bool = False
     base_retried: dict[Side, bool] = field(default_factory=lambda: {Side.YES: False, Side.NO: False})
     realized: float = 0.0                       # from sells before resolution
     fees_paid: float = 0.0
-    layer_cost: dict[int, float] = field(default_factory=lambda: {1: 0.0, 2: 0.0})
-    layer_payout: dict[int, float] = field(default_factory=lambda: {1: 0.0, 2: 0.0})
     fills: list[Fill] = field(default_factory=list)
 
     # ---- fill application ---------------------------------------------
     def apply_fill(self, f: Fill) -> None:
-        layer = LAYER_OF[f.signal]
         if f.action.value == "BUY":
             self.shares[f.side] += f.shares
             self.cost[f.side] += f.price * f.shares + f.fee
             self.bought[f.side] += f.shares
             self.fill_count[f.side] += 1
-            self.layer_cost[layer] += f.price * f.shares + f.fee
             if f.signal is SignalType.SCALE_ADD:
                 self.adds_used[f.side] += 1
             if f.signal is SignalType.SKEW:
@@ -45,11 +42,19 @@ class Position:
             self.realized += (f.price - avg) * sell - f.fee
             self.shares[f.side] -= sell
             self.cost[f.side] -= avg * sell
-            # layer accounting keeps the ORIGINAL cost and credits full proceeds,
-            # so layer_pnl = remaining winner shares − total cost + proceeds
-            self.layer_payout[layer] += f.price * sell - f.fee
+            if f.signal is SignalType.TAKE_PROFIT and sell > 0:
+                # a filled TP settles its pending level as genuinely taken
+                self.tp_pending.pop(f.order_id, None)
         self.fees_paid += f.fee
         self.fills.append(f)
+
+    def order_closed(self, intent, filled_shares: float) -> None:
+        """An order died at the executor (cancel/TTL/reject/drop). Re-arm one-shot
+        state that was consumed at intent time but never produced a fill."""
+        if intent.signal is SignalType.TAKE_PROFIT and filled_shares < 0.5:
+            level = self.tp_pending.pop(intent.id, None)
+            if level is not None:
+                self.tp_taken.discard(level)
 
     # ---- derived views -------------------------------------------------
     def fill_rate(self, side: Side) -> float | None:
@@ -122,17 +127,35 @@ class Position:
     def layer_pnl(self, winner: Side) -> dict[int, float]:
         """Attribute resolution P&L to layer 1 (base+ladder) vs layer 2 (skew+TP).
 
-        Each layer's buys pay out $1/share for the winning side; a layer's remaining
-        shares per side are reconstructed from its fills.
+        Chronological walk over fills. A SELL consumes the selling layer's own
+        inventory first, then spills into the other layer's (a TP can sell layer-1
+        shares when the net imbalance includes them) — each portion's realized P&L is
+        booked to the layer whose inventory was sold. The layer sums always equal
+        resolution_pnl exactly.
         """
-        shares_by_layer: dict[int, dict[Side, float]] = {1: {s: 0.0 for s in Side}, 2: {s: 0.0 for s in Side}}
+        shares = {1: {s: 0.0 for s in Side}, 2: {s: 0.0 for s in Side}}
+        cost = {1: {s: 0.0 for s in Side}, 2: {s: 0.0 for s in Side}}
+        realized = {1: 0.0, 2: 0.0}
         for f in self.fills:
             layer = LAYER_OF[f.signal]
-            sign = 1.0 if f.action.value == "BUY" else -1.0
-            shares_by_layer[layer][f.side] += sign * f.shares
+            if f.action.value == "BUY":
+                shares[layer][f.side] += f.shares
+                cost[layer][f.side] += f.price * f.shares + f.fee
+                continue
+            qty = f.shares
+            fee_per_share = f.fee / f.shares if f.shares else 0.0
+            for lay in (layer, 1 if layer == 2 else 2):
+                take = min(qty, shares[lay][f.side])
+                if take <= 0:
+                    continue
+                avg = cost[lay][f.side] / shares[lay][f.side]
+                realized[lay] += (f.price - avg) * take - fee_per_share * take
+                shares[lay][f.side] -= take
+                cost[lay][f.side] -= avg * take
+                qty -= take
+                if qty <= 1e-9:
+                    break
         return {
-            layer: max(0.0, shares_by_layer[layer][winner])
-            - self.layer_cost[layer]
-            + self.layer_payout[layer]
-            for layer in (1, 2)
+            lay: shares[lay][winner] - (cost[lay][Side.YES] + cost[lay][Side.NO]) + realized[lay]
+            for lay in (1, 2)
         }

@@ -5,7 +5,11 @@ USE ONLY AFTER THE VALIDATION GATES IN plan.md PASS. Requires:
     POLYGON_WALLET_PRIVATE_KEY (+ optionally pre-derived API creds) in .env
 
 The client is synchronous, so calls run in a thread executor. Fills arrive via the
-CLOB v2 user-channel websocket; REST reconciliation runs on connect.
+CLOB v2 user-channel websocket (both taker and maker fills).
+
+Startup reconciliation: any orders left at the exchange by a previous run are
+CANCELLED at startup (clean slate). Pre-existing POSITIONS are not adopted — the bot
+warns and ignores them; redeem or manage those in the Polymarket UI.
 
 NOTE: redemption of resolved positions is an on-chain ConditionalTokens call and is
 NOT automated here yet - winnings must be redeemed via the Polymarket UI (logged as a
@@ -20,7 +24,7 @@ import time
 
 import websockets
 
-from bot.models import Action, Fill, Order, OrderIntent, OrderStatus, SignalType
+from bot.models import Action, Fill, Order, OrderIntent, OrderStatus
 
 log = logging.getLogger("live")
 
@@ -31,7 +35,9 @@ class LiveExecutor:
         self.hub = hub
         self.spots = spot_states
         self.recorder = recorder
-        self.orders: dict[str, Order] = {}   # exchange order id -> Order
+        self.orders: dict[str, Order] = {}        # exchange order id -> Order
+        self._inflight: dict[int, OrderIntent] = {}   # intent.id -> intent, during placement
+        self._bg: set[asyncio.Task] = set()       # tracked background cancel/place tasks
         self.client = None
         self.creds = None
         self._consec_errors = 0
@@ -67,78 +73,140 @@ class LiveExecutor:
         self.client.set_api_creds(self.creds)
         log.info("CLOB client ready (py-clob-client-v2, L2 auth)")
 
+    def _track(self, coro) -> asyncio.Task:
+        task = asyncio.get_running_loop().create_task(coro)
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+        return task
+
     # ---- interface (same as PaperExecutor) --------------------------------
     def submit(self, intent: OrderIntent) -> None:
         if time.time() < self._cooldown_until:
-            return   # placement errors are hot — don't machine-gun the API
-        asyncio.get_running_loop().create_task(self._place(intent))
+            # dropped, not deferred — tell the hub so one-shot state (TP levels) re-arms
+            self.hub.order_closed(intent, 0.0)
+            return
+        # register BEFORE the async placement so the engine's pending gate sees it
+        self._inflight[intent.id] = intent
+        self._track(self._place(intent))
 
     def cancel_market(self, market_id: str, why: str = "") -> int:
         n = 0
         for oid, o in list(self.orders.items()):
             if o.intent.market_id == market_id and o.status == OrderStatus.RESTING:
-                asyncio.get_running_loop().create_task(self._cancel(oid, why))
+                self._track(self._cancel(oid, why))
                 n += 1
         return n
 
     def cancel_all(self, why: str = "") -> int:
+        n = sum(1 for o in self.orders.values() if o.status == OrderStatus.RESTING)
         try:
-            asyncio.get_running_loop().create_task(self._cancel_all(why))
+            self._track(self._cancel_all(why))
         except RuntimeError:
             pass
-        return len(self.orders)
+        return n
+
+    async def aclose(self) -> None:
+        """Awaited on shutdown: make sure the exchange-side cancel actually lands."""
+        await self._cancel_all("shutdown")
+        pending = [t for t in self._bg if not t.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def open_shares(self, market_id: str, side) -> float:
-        """BUY shares still resting at the exchange for this market/side."""
-        return sum(o.remaining for o in self.orders.values()
-                   if o.status == OrderStatus.RESTING and o.intent.market_id == market_id
-                   and o.intent.side is side and o.intent.action is Action.BUY)
+        """BUY shares working for this market/side: in-flight placements + resting."""
+        total = sum(i.shares for i in self._inflight.values()
+                    if i.market_id == market_id and i.side is side and i.action is Action.BUY)
+        total += sum(o.remaining for o in self.orders.values()
+                     if o.status == OrderStatus.RESTING and o.intent.market_id == market_id
+                     and o.intent.side is side and o.intent.action is Action.BUY)
+        return total
+
+    def open_buy_orders(self) -> list[tuple[str, object, float, float]]:
+        """(market_id, side, shares, price) for every working BUY — used by risk caps."""
+        out = [(i.market_id, i.side, i.shares, i.price) for i in self._inflight.values()
+               if i.action is Action.BUY]
+        out += [(o.intent.market_id, o.intent.side, o.remaining, o.intent.price)
+                for o in self.orders.values()
+                if o.status == OrderStatus.RESTING and o.intent.action is Action.BUY]
+        return out
 
     def on_trade_print(self, token_id: str, price: float) -> None:
         pass  # real fills come from the user channel
 
     async def run(self) -> None:
+        await self._reconcile_startup()
         await asyncio.gather(self._user_channel(), self._sweep_loop())
+
+    # ---- startup reconciliation -----------------------------------------------
+    async def _reconcile_startup(self) -> None:
+        """Clean slate: cancel any orders a previous run left at the exchange.
+
+        Orphaned resting orders from a crashed/killed run would otherwise fill
+        invisibly (their ids are unknown to this process). Positions cannot be
+        safely adopted into per-market accounting — warn instead.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self.client.cancel_all)
+            self.recorder.log("cancel_all", {"why": "startup reconciliation (clean slate)"})
+            self.hub.note("startup: cancelled any orders left by a previous run")
+        except Exception as e:  # noqa: BLE001
+            log.error("startup cancel_all failed: %s — orphaned orders may exist!", e)
+            self.hub.note(f"WARNING: startup order cleanup failed ({e}) — check the "
+                          "Polymarket UI for orphaned orders")
+        self.hub.note("note: positions from previous runs are NOT tracked — "
+                      "redeem/manage them in the Polymarket UI")
 
     # ---- order placement ------------------------------------------------
     async def _place(self, intent: OrderIntent) -> None:
         from py_clob_client_v2 import OrderArgs, OrderType
         loop = asyncio.get_running_loop()
-        args = OrderArgs(
-            token_id=intent.token_id,
-            price=round(intent.price, 3),
-            size=round(intent.shares, 2),
-            side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
-        )
         try:
-            signed = await loop.run_in_executor(None, self.client.create_order, args)
-            resp = await loop.run_in_executor(
-                None, lambda: self.client.post_order(signed, order_type=OrderType.GTC))
-            oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
-            if not oid:
-                log.warning("order rejected: %s", resp)
-                self.recorder.log("order", {"id": intent.id, "status": "REJECTED", "resp": str(resp)[:200]})
+            # conditions may have changed while this task waited to run
+            rt = self.hub.markets.get(intent.market_id)
+            if self.hub.halted or rt is None or rt.resolved:
+                self.hub.order_closed(intent, 0.0)
                 return
-            spot = self.spots.get(self.hub.markets[intent.market_id].market.asset)
-            order = Order(intent=intent, status=OrderStatus.RESTING,
-                          spot_at_place=spot.price if spot else None, exchange_id=oid)
-            self.orders[oid] = order
-            self._consec_errors = 0
-            self.recorder.log("order", {"id": intent.id, "exchange_id": oid,
-                                        "market_id": intent.market_id, "side": intent.side.value,
-                                        "action": intent.action.value, "price": intent.price,
-                                        "shares": intent.shares, "signal": intent.signal.value,
-                                        "status": "RESTING"})
-        except Exception as e:  # noqa: BLE001
-            self._consec_errors += 1
-            self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)
-            log.error("order placement failed (%d consecutive): %s", self._consec_errors, e)
-            self.recorder.log("order_error", {"id": intent.id, "error": str(e)[:200],
-                                              "consecutive": self._consec_errors})
-            if self._consec_errors >= 10 and not self.hub.paused:
-                self.hub.paused = True
-                self.hub.note(f"AUTO-PAUSED: {self._consec_errors} consecutive order errors "
-                              f"({str(e)[:80]}) - fix the cause, then resume from the dashboard")
+            args = OrderArgs(
+                token_id=intent.token_id,
+                price=round(intent.price, 3),
+                size=round(intent.shares, 2),
+                side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
+            )
+            try:
+                signed = await loop.run_in_executor(None, self.client.create_order, args)
+                resp = await loop.run_in_executor(
+                    None, lambda: self.client.post_order(signed, order_type=OrderType.GTC))
+                oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
+                if not oid:
+                    log.warning("order rejected: %s", resp)
+                    self.recorder.log("order", {"id": intent.id, "status": "REJECTED",
+                                                "resp": str(resp)[:200]})
+                    self.hub.order_closed(intent, 0.0)
+                    return
+                spot = self.spots.get(rt.market.asset)
+                order = Order(intent=intent, status=OrderStatus.RESTING,
+                              spot_at_place=spot.price if spot else None, exchange_id=oid)
+                self.orders[oid] = order
+                self._consec_errors = 0
+                self.recorder.log("order", {"id": intent.id, "exchange_id": oid,
+                                            "market_id": intent.market_id, "side": intent.side.value,
+                                            "action": intent.action.value, "price": intent.price,
+                                            "shares": intent.shares, "signal": intent.signal.value,
+                                            "status": "RESTING"})
+            except Exception as e:  # noqa: BLE001
+                self._consec_errors += 1
+                self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)
+                log.error("order placement failed (%d consecutive): %s", self._consec_errors, e)
+                self.recorder.log("order_error", {"id": intent.id, "error": str(e)[:200],
+                                                  "consecutive": self._consec_errors})
+                self.hub.order_closed(intent, 0.0)
+                if self._consec_errors >= 10 and not self.hub.paused:
+                    self.hub.paused = True
+                    self.hub.note(f"AUTO-PAUSED: {self._consec_errors} consecutive order errors "
+                                  f"({str(e)[:80]}) - fix the cause, then resume from the dashboard")
+        finally:
+            self._inflight.pop(intent.id, None)
 
     async def _cancel(self, exchange_id: str, why: str) -> None:
         from py_clob_client_v2.clob_types import OrderPayload
@@ -149,8 +217,9 @@ class LiveExecutor:
         except Exception as e:  # noqa: BLE001
             log.warning("cancel %s failed: %s", exchange_id[:12], e)
         order = self.orders.get(exchange_id)
-        if order:
+        if order and order.status == OrderStatus.RESTING:
             order.status = OrderStatus.CANCELLED
+            self.hub.order_closed(order.intent, order.filled_shares)
         self.recorder.log("cancel", {"exchange_id": exchange_id, "why": why})
 
     async def _cancel_all(self, why: str) -> None:
@@ -160,8 +229,12 @@ class LiveExecutor:
             self.recorder.log("cancel_all", {"why": why})
         except Exception as e:  # noqa: BLE001
             log.error("cancel_all failed: %s", e)
+        for order in self.orders.values():
+            if order.status == OrderStatus.RESTING:
+                order.status = OrderStatus.CANCELLED
+                self.hub.order_closed(order.intent, order.filled_shares)
 
-    # ---- user channel: fills -----------------------------------------------
+    # ---- user channel: fills (taker AND maker) --------------------------------
     async def _user_channel(self) -> None:
         url = f"{self.s.clob_ws}/ws/user"
         auth = {"apiKey": self.creds.api_key, "secret": self.creds.api_secret,
@@ -187,13 +260,33 @@ class LiveExecutor:
                 await asyncio.sleep(2)
 
     def _on_trade_event(self, ev: dict) -> None:
-        try:
-            oid = ev.get("taker_order_id") or ev.get("order_id") or ""
-            order = self.orders.get(oid)
-            price = float(ev["price"])
-            size = float(ev.get("size") or ev.get("matched_amount") or 0)
-        except (KeyError, ValueError, TypeError):
+        """Book fills whether our order was the taker or a maker in the trade."""
+        # taker side: our id in taker_order_id/order_id
+        oid = ev.get("taker_order_id") or ev.get("order_id") or ""
+        if oid in self.orders:
+            try:
+                price = float(ev["price"])
+                size = float(ev.get("size") or ev.get("matched_amount") or 0)
+            except (KeyError, ValueError, TypeError):
+                return
+            self._book_fill(oid, price, size)
             return
+        # maker side: our id inside the maker orders array
+        for mo in ev.get("maker_orders") or []:
+            if not isinstance(mo, dict):
+                continue
+            moid = mo.get("order_id") or mo.get("orderID") or ""
+            if moid not in self.orders:
+                continue
+            try:
+                price = float(mo.get("price") or ev.get("price"))
+                size = float(mo.get("matched_amount") or mo.get("size") or 0)
+            except (ValueError, TypeError):
+                continue
+            self._book_fill(moid, price, size)
+
+    def _book_fill(self, exchange_id: str, price: float, size: float) -> None:
+        order = self.orders.get(exchange_id)
         if order is None or size <= 0:
             return
         i = order.intent
@@ -215,6 +308,9 @@ class LiveExecutor:
             now = time.time()
             for oid, o in list(self.orders.items()):
                 if o.status != OrderStatus.RESTING:
+                    if o.status in (OrderStatus.FILLED, OrderStatus.CANCELLED,
+                                    OrderStatus.EXPIRED) and now - o.placed_ts > 120:
+                        self.orders.pop(oid, None)   # prune terminal orders
                     continue
                 i = o.intent
                 if now - o.placed_ts > self.s.order_ttl_s:

@@ -262,10 +262,14 @@ class SignalEngine:
             shares = round(pos.skew_shares * frac, 1)
             if shares < 1:
                 continue
-            pos.tp_taken.add(level)
-            intents.append(OrderIntent(
+            intent = OrderIntent(
                 market_id=rt.market.condition_id, token_id=rt.market.token[side], side=side,
                 action=Action.SELL, price=top.bid, shares=shares,
                 signal=SignalType.TAKE_PROFIT, reason=f"TP @ {level:.2f} (bid {top.bid:.3f})",
-            ))
+            )
+            # consumed now to block re-fire, but tracked as pending: if the sell dies
+            # unfilled the executor's order_closed callback re-arms the level
+            pos.tp_taken.add(level)
+            pos.tp_pending[intent.id] = level
+            intents.append(intent)
         return intents

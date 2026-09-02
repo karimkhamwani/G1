@@ -73,23 +73,35 @@ class SimExecutor:
     def submit(self, intent: OrderIntent) -> None:
         self.submitted += 1
         self.resting.append({"i": intent, "activate": self.now + self.s.paper_latency_ms / 1000.0,
-                             "placed": self.now, "active": False,
+                             "placed": self.now, "active": False, "filled": 0.0,
                              "spot": self.spots[self.hub.markets[intent.market_id].market.asset].price})
 
+    def _drop(self, r: dict) -> None:
+        """Remove a working order and notify the hub (re-arms one-shot state like TP levels)."""
+        if r in self.resting:
+            self.resting.remove(r)
+        self.hub.order_closed(r["i"], r["filled"])
+
     def cancel_market(self, market_id: str, why: str = "") -> int:
-        n = len([r for r in self.resting if r["i"].market_id == market_id])
-        self.resting = [r for r in self.resting if r["i"].market_id != market_id]
-        return n
+        doomed = [r for r in self.resting if r["i"].market_id == market_id]
+        for r in doomed:
+            self._drop(r)
+        return len(doomed)
 
     def cancel_all(self, why: str = "") -> int:
-        n = len(self.resting)
-        self.resting.clear()
-        return n
+        doomed = list(self.resting)
+        for r in doomed:
+            self._drop(r)
+        return len(doomed)
 
     def open_shares(self, market_id: str, side) -> float:
-        return sum(r["i"].shares for r in self.resting
+        return sum(r["i"].shares - r["filled"] for r in self.resting
                    if r["i"].market_id == market_id and r["i"].side is side
                    and r["i"].action is Action.BUY)
+
+    def open_buy_orders(self) -> list[tuple[str, object, float, float]]:
+        return [(r["i"].market_id, r["i"].side, r["i"].shares - r["filled"], r["i"].price)
+                for r in self.resting if r["i"].action is Action.BUY]
 
     def on_trade_print(self, token_id: str, price: float) -> None:
         for r in list(self.resting):
@@ -103,7 +115,7 @@ class SimExecutor:
             i = r["i"]
             rt = self.hub.markets.get(i.market_id)
             if rt is None or rt.resolved:
-                self.resting.remove(r)
+                self._drop(r)
                 continue
             top = rt.books[i.side]
             if not r["active"]:
@@ -113,14 +125,15 @@ class SimExecutor:
                 if i.action is Action.SELL:
                     if top.bid is not None:
                         self._fill(r, top.bid, cap=top.bid_size)
-                    else:
-                        self.resting.remove(r)
+                    self._drop(r)   # sells don't rest (same as paper mode)
                     continue
                 if top.ask is not None and top.ask <= i.price:
+                    # partial marketable fill: the remainder keeps RESTING, same as
+                    # paper mode — discarding it made backtest fills diverge
                     self._fill(r, top.ask, cap=top.ask_size)
                     continue
             if now - r["placed"] > self.s.order_ttl_s:
-                self.resting.remove(r)
+                self._drop(r)
                 continue
             if i.action is Action.BUY and top.ask is not None and top.ask < i.price:
                 self._fill(r, i.price)
@@ -130,18 +143,22 @@ class SimExecutor:
                 move = (spot.price - r["spot"]) / r["spot"]
                 adverse = -move if i.side is Side.YES else move
                 if i.action is Action.BUY and adverse > self.s.fast_cancel_spot_move:
-                    self.resting.remove(r)
+                    self._drop(r)
 
     def _fill(self, r: dict, price: float, cap: float | None = None) -> None:
         i = r["i"]
-        shares = min(i.shares, max(cap, 1.0)) if cap is not None else i.shares
+        remaining = i.shares - r["filled"]
+        shares = min(remaining, max(cap, 1.0)) if cap is not None else remaining
+        if shares <= 0:
+            return
         rt = self.hub.markets[i.market_id]
         fee = (effective_cost(price, rt.market.taker_fee_bps) - price) * shares
         self.hub.on_fill(Fill(market_id=i.market_id, side=i.side, action=i.action,
                               price=price, shares=shares, fee=fee, signal=i.signal,
                               ts=self.now, order_id=i.id))
         self.filled_orders += 1
-        if r in self.resting:
+        r["filled"] += shares
+        if r["filled"] >= i.shares - 0.5 and r in self.resting:
             self.resting.remove(r)
 
 
@@ -172,6 +189,38 @@ def run(paths: list[Path]) -> dict:
                           clock=lambda: clock["now"], rng=random.Random(1))  # deterministic replays
 
     results = []
+
+    def settle(rt, winner: Side, source: str) -> None:
+        rt.resolved = True
+        sim.cancel_market(rt.market.condition_id)
+        pos = rt.position
+        if pos.total_shares > 0 or pos.realized:
+            results.append({
+                "pnl": pos.resolution_pnl(winner),
+                "layers": pos.layer_pnl(winner),
+                "regime": rt.regime.label if rt.regime else "-",
+                "combined_avg": pos.combined_avg,
+                "fills": len(pos.fills),
+                "settled_by": source,
+            })
+        hub.markets.pop(rt.market.condition_id, None)
+
+    def settle_expired(now: float) -> None:
+        """Fallback: the original run logs no 'resolved' event for windows it never
+        traded, but THIS replay may have traded them — settle on last spot so their
+        positions don't linger and strangle the risk caps."""
+        for rt in list(hub.markets.values()):
+            if rt.resolved or now < rt.market.end_ts + 5:
+                continue
+            spot = spots.get(rt.market.asset)
+            if rt.market.strike is not None and spot and spot.price:
+                winner = Side.YES if spot.price > rt.market.strike else Side.NO
+                settle(rt, winner, "spot_fallback")
+            else:
+                rt.resolved = True
+                sim.cancel_market(rt.market.condition_id)
+                hub.markets.pop(rt.market.condition_id, None)
+
     for path in paths:
         f = path / "events.jsonl" if path.is_dir() else path
         if not f.exists():
@@ -185,6 +234,7 @@ def run(paths: list[Path]) -> dict:
                     continue
                 clock["now"] = ev["ts"]
                 sim.tick(ev["ts"])
+                settle_expired(ev["ts"])
                 t = ev["type"]
                 if t == "market_discovered":
                     m = Market(condition_id=ev["condition_id"], slug=ev["slug"],
@@ -217,19 +267,12 @@ def run(paths: list[Path]) -> dict:
                 elif t == "resolved":
                     rt = hub.markets.get(ev["market_id"])
                     if rt and not rt.resolved:
-                        rt.resolved = True
-                        sim.cancel_market(ev["market_id"])
-                        winner = Side.YES if ev["close"] >= ev["strike"] else Side.NO
-                        pos = rt.position
-                        if pos.total_shares > 0 or pos.realized:
-                            results.append({
-                                "pnl": pos.resolution_pnl(winner),
-                                "layers": pos.layer_pnl(winner),
-                                "regime": rt.regime.label if rt.regime else "-",
-                                "combined_avg": pos.combined_avg,
-                                "fills": len(pos.fills),
-                            })
-                        hub.markets.pop(ev["market_id"], None)
+                        # tie rule: Up wins only strictly above the open
+                        winner = (Side.YES if ev.get("close") is not None
+                                  and ev["close"] > ev["strike"] else Side.NO)
+                        settle(rt, winner, "recorded")
+    # settle anything still open at the end of the corpus
+    settle_expired(clock["now"] + 10_000)
     return report(results, sim)
 
 

@@ -77,6 +77,13 @@ class Hub:
         self.fills.appendleft(rec)
         return rec
 
+    def order_closed(self, intent, filled_shares: float) -> None:
+        """Executor callback: an order reached a terminal state (cancel/TTL/reject/
+        drop) — lets the position re-arm one-shot state consumed at intent time."""
+        rt = self.markets.get(intent.market_id)
+        if rt:
+            rt.position.order_closed(intent, filled_shares)
+
     def book_pnl(self, amount: float) -> None:
         self.session_pnl += amount
         self.daily_pnl += amount
@@ -164,10 +171,14 @@ class Hub:
         }
 
     # ---- restore from the trade log ---------------------------------------
-    def load_trade_log(self, path) -> None:
+    def load_trade_log(self, path, mode: str | None = None) -> None:
         """Rebuild fills tape, resolved history, equity curve, and P&L totals from
         data/trades.jsonl so the dashboard survives restarts. Daily P&L is also
-        restored, which keeps the daily-loss kill switch honest across restarts."""
+        restored, which keeps the daily-loss kill switch honest across restarts.
+
+        Only resolved records matching `mode` (paper/live) are counted — paper and
+        live share the trade log, and mixing their P&L would corrupt the daily-loss
+        kill-switch threshold after a mode switch."""
         import json
         from datetime import datetime, timezone
         from pathlib import Path
@@ -197,6 +208,8 @@ class Hub:
                     recent_fills.append(ev)
                     n_fills += 1
                 elif t == "resolved":
+                    if mode is not None and ev.get("mode") != mode:
+                        continue   # never mix paper and live P&L in the totals
                     pnl = float(ev.get("pnl", 0))
                     cum += pnl
                     ts = float(ev.get("ts", 0))

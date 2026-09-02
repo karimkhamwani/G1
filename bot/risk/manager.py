@@ -32,13 +32,25 @@ class RiskManager:
         if hub.paused:
             return "paused"
         pos = rt.position
-        if pos.total_shares + intent.shares > s.max_shares_per_market:
+        # caps must count working (resting/in-flight) BUY orders too, not just fills —
+        # otherwise several concurrent orders each pass and collectively breach the cap
+        pend_mkt_shares = pend_mkt_notional = pend_side_shares = pend_total_notional = 0.0
+        open_buys = getattr(self.executor, "open_buy_orders", None)
+        if open_buys:
+            for market_id, side, shares, price in open_buys():
+                pend_total_notional += price * shares
+                if market_id == intent.market_id:
+                    pend_mkt_shares += shares
+                    pend_mkt_notional += price * shares
+                    if side is intent.side:
+                        pend_side_shares += shares
+        if pos.total_shares + pend_mkt_shares + intent.shares > s.max_shares_per_market:
             return "max_shares_per_market"
-        if pos.shares[intent.side] + intent.shares > s.max_shares_per_side:
+        if pos.shares[intent.side] + pend_side_shares + intent.shares > s.max_shares_per_side:
             return "max_shares_per_side"
-        if pos.cost_basis + intent.notional > s.max_per_market_usdc:
+        if pos.cost_basis + pend_mkt_notional + intent.notional > s.max_per_market_usdc:
             return "max_per_market_usdc"
-        if hub.total_exposure() + intent.notional > s.max_total_exposure_usdc:
+        if hub.total_exposure() + pend_total_notional + intent.notional > s.max_total_exposure_usdc:
             return "max_total_exposure"
         if pos.total_shares == 0 and hub.open_market_count() >= s.max_concurrent_markets:
             return "max_concurrent_markets"

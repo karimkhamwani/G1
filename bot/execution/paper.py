@@ -58,6 +58,18 @@ class PaperExecutor:
                      and o.intent.side is side and o.intent.action is Action.BUY)
         return total
 
+    def open_buy_orders(self) -> list[tuple[str, Side, float, float]]:
+        """(market_id, side, shares, price) for every working BUY — used by risk caps."""
+        out = [(i.market_id, i.side, i.shares, i.price) for _, i in self._pending
+               if i.action is Action.BUY]
+        out += [(o.intent.market_id, o.intent.side, o.remaining, o.intent.price)
+                for o in self.orders.values()
+                if o.status == OrderStatus.RESTING and o.intent.action is Action.BUY]
+        return out
+
+    async def aclose(self) -> None:
+        self.cancel_all("shutdown")
+
     def on_trade_print(self, token_id: str, price: float) -> None:
         """A real trade printed on the book — resting buys below it fill through."""
         for o in list(self.orders.values()):
@@ -80,6 +92,7 @@ class PaperExecutor:
         for _, intent in due:
             rt = self.hub.markets.get(intent.market_id)
             if rt is None or rt.resolved or self.hub.halted:
+                self.hub.order_closed(intent, 0.0)   # dropped: re-arm one-shot state
                 continue
             spot = self.spots.get(rt.market.asset)
             order = Order(intent=intent, spot_at_place=spot.price if spot else None)
@@ -108,8 +121,10 @@ class PaperExecutor:
                                         "signal": intent.signal.value, "status": order.status.value})
 
     def _sweep(self, now: float) -> None:
-        for o in list(self.orders.values()):
+        for oid, o in list(self.orders.items()):
             if o.status != OrderStatus.RESTING:
+                if now - o.placed_ts > 120:
+                    self.orders.pop(oid, None)   # prune terminal orders
                 continue
             i = o.intent
             if now - o.placed_ts > self.s.order_ttl_s:
@@ -149,5 +164,6 @@ class PaperExecutor:
 
     def _cancel(self, order: Order, why: str, expired: bool = False) -> None:
         order.status = OrderStatus.EXPIRED if expired else OrderStatus.CANCELLED
+        self.hub.order_closed(order.intent, order.filled_shares)
         self.recorder.log("cancel", {"id": order.intent.id, "why": why,
                                      "market_id": order.intent.market_id})

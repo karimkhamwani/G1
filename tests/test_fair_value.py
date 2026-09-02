@@ -35,3 +35,8 @@ def test_effective_cost_adds_fee_on_cheap_side():
     assert effective_cost(0.30, 0) == 0.30
     assert effective_cost(0.30, 100) == 0.30 + 0.01 * 0.30
     assert effective_cost(0.70, 100) == 0.70 + 0.01 * 0.30  # fee scales with min(p, 1-p)
+
+
+def test_tie_resolves_down():
+    # Up wins only strictly above the open: a tie is Down/NO
+    assert fair_yes(100_000, 100_000, 1e-4, 0.0, 0) == 0.0
