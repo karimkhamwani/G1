@@ -5,7 +5,7 @@ import time
 from bot.models import Action, BookTop, Fill, Market, Side, SignalType
 from bot.settings import Settings
 from bot.signal.engine import SignalEngine
-from bot.signal.regime import classify
+from bot.signal.regime import MIN_BARS, classify
 from bot.state import Hub, MarketRuntime
 
 
@@ -13,6 +13,11 @@ class FakeSpot:
     def __init__(self, price, prices, sigma=1e-4, drift=0.0):
         self.price = price
         self.ts = time.time()
+        # classify() needs MIN_BARS samples before it trusts a read; repeating the
+        # series preserves its high, low and last value, so the regime is unchanged
+        if prices:
+            reps = -(-(MIN_BARS + 1) // len(prices))
+            prices = list(prices) * max(reps, 1)
         self._prices = prices
         self._sigma = sigma
         self._drift = drift
@@ -130,10 +135,18 @@ def test_skew_needs_confluence():
 
 
 def test_regime_classifier_labels():
-    trending = classify([100_000 + i * 50 for i in range(10)], 100_000, 2.0)
-    assert trending.trending
-    choppy = classify([100_000, 100_100, 99_900, 100_080, 99_950, 100_010], 100_000, 2.0)
-    assert not choppy.trending
+    trending = classify([100_000 + i * 50 for i in range(40)], 100_000, 2.0)
+    assert trending.trending and trending.known
+    choppy = classify([100_000, 100_100, 99_900, 100_080, 99_950, 100_010] * 6, 100_000, 2.0)
+    assert not choppy.trending and choppy.known
+
+
+def test_regime_fails_closed_without_enough_data():
+    """Too few bars must freeze the ladder, not unlock it (the old code said choppy)."""
+    starved = classify([100_000, 100_050], 100_000, 2.0)
+    assert starved.trending is True      # trending => _scale_adds returns []
+    assert starved.known is False
+    assert starved.label == "unknown"
 
 
 class PendingAwareExecutor(CollectingExecutor):

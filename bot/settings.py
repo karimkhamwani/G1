@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # scaling (layer 1)
     base_shares: float = 20
     entry_window_s: int = 30
+    repair_max_slip: float = 0.03       # abandon a base leg repair rather than chase this far
     add_trigger_drop: float = 0.05
     add_margin: float = 0.03
     add_step_shares: float = 10
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     max_shares_per_side: float = 60
 
     # skew (layer 2)
+    skew_enabled: bool = True           # False = layer 2 never opens a position
     skew_threshold: float = 0.05
     skew_step_shares: float = 10
     max_skew_shares: float = 40

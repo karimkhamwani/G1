@@ -139,6 +139,7 @@ class Discovery:
         if cached and time.time() - cached[0] < self.s.fee_refresh_min * 60:
             return cached[1], cached[2]
         maker = taker = None
+        fetched = False
         try:
             url = f"{self.s.clob_host}/markets/{condition_id}"
             async with http.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -146,16 +147,18 @@ class Discovery:
                     data = await resp.json()
                     maker = float(data.get("maker_base_fee") or 0)
                     taker = float(data.get("taker_base_fee") or 0)
+                    fetched = True   # the exchange answered; believe what it said
                 else:
                     log.warning("fee fetch %s -> HTTP %s", condition_id[:10], resp.status)
         except Exception as e:  # noqa: BLE001
             log.warning("fee fetch failed for %s: %s", condition_id[:10], e)
-        # these markets are known to charge fees: a failed fetch or a 0 answer is far
-        # more likely an API hiccup than a free market — assume the conservative default
-        if not taker:
-            log.warning("fee for %s unknown/zero - assuming %.0f bps (DEFAULT_FEE_BPS)",
+        # A successful response saying 0 means the market IS free — most Polymarket
+        # markets are. Only substitute the conservative default when the fetch itself
+        # failed; assuming 1000bps on a real 0 poisoned every fee-gated decision.
+        if not fetched:
+            log.warning("fee for %s unavailable - assuming %.0f bps (DEFAULT_FEE_BPS)",
                         condition_id[:10], self.s.default_fee_bps)
             taker = self.s.default_fee_bps
-            maker = maker or self.s.default_fee_bps
+            maker = self.s.default_fee_bps if maker is None else maker
         self._fees[condition_id] = (time.time(), maker, taker)
         return maker, taker

@@ -31,6 +31,7 @@ class SignalEngine:
         self.recorder = recorder
         self.clock = clock
         self.rng = rng or random.Random()
+        self._vol_warned: dict[str, bool] = {}   # asset -> already noted "no vol estimate"
 
     # ---- entry points ----------------------------------------------------
     def kick_market(self, market_id: str) -> None:
@@ -57,6 +58,19 @@ class SignalEngine:
 
         t_rem = m.end_ts - now
         sigma, drift = spot.sigma_per_sqrt_s(), spot.drift_per_s()
+        if sigma <= 0.0:
+            # No trustworthy volatility estimate. fair_yes would divide by the MIN_SIGMA
+            # floor and saturate to ~0/~1, turning sub-basis-point noise into false
+            # conviction — which is exactly how the skew layer lost money. Take-profit
+            # still runs below: it reduces risk and does not depend on the model.
+            rt.fair_yes = None
+            rt.confluence_dir = 0
+            if not self._vol_warned.get(m.asset):
+                self._vol_warned[m.asset] = True
+                self.hub.note(f"{m.asset}: no usable volatility estimate "
+                              f"(feed gaps) - entries paused")
+            return self._submit(rt, self._take_profit(rt), None, None)
+        self._vol_warned[m.asset] = False
         fair = fair_yes(spot.price, m.strike, sigma, drift, t_rem)
         rt.fair_yes = fair
         fair_of = {Side.YES: fair, Side.NO: 1.0 - fair}
@@ -71,6 +85,13 @@ class SignalEngine:
         intents += self._skew(rt, fair_of, t_rem)
         intents += self._take_profit(rt)
 
+        return self._submit(rt, intents, fair, regime, sigma, drift, spot.price, t_rem)
+
+    def _submit(self, rt, intents, fair, regime, sigma=0.0, drift=0.0,
+                spot_price=None, t_rem=0.0) -> list[OrderIntent]:
+        """Risk-check, log and dispatch intents. Shared by the normal path and the
+        no-volatility path (which still runs take-profit)."""
+        m = rt.market
         submitted = []
         for intent in intents:
             verdict = self.risk.validate(intent, rt)
@@ -79,11 +100,13 @@ class SignalEngine:
                     "market_id": m.condition_id, "signal": intent.signal.value,
                     "side": intent.side.value, "action": intent.action.value,
                     "price": intent.price, "shares": round(intent.shares, 2),
-                    "fair_yes": round(fair, 4), "regime": regime.label,
-                    "chop": round(regime.chop_score, 2), "reason": intent.reason,
+                    "fair_yes": round(fair, 4) if fair is not None else None,
+                    "regime": regime.label if regime else "unknown",
+                    "chop": round(regime.chop_score, 2) if regime else None,
+                    "reason": intent.reason,
                     # model diagnostics — needed to debug fair-value quality offline
                     "sigma": round(sigma, 8), "drift": round(drift, 8),
-                    "spot": spot.price, "strike": m.strike, "t_rem": round(t_rem, 1),
+                    "spot": spot_price, "strike": m.strike, "t_rem": round(t_rem, 1),
                 })
                 if intent.action is Action.BUY:
                     rt.position.ordered[intent.side] += intent.shares
@@ -115,6 +138,7 @@ class SignalEngine:
                 return []   # need both books sane before committing either leg
             if top.ask_depth_usdc + top.bid_depth_usdc < self.s.min_book_depth_usdc:
                 return []
+            pos.base_price[side] = top.ask
             intents.append(OrderIntent(
                 market_id=m.condition_id, token_id=m.token[side], side=side,
                 action=Action.BUY, price=top.ask, shares=self.s.base_shares,
@@ -135,6 +159,15 @@ class SignalEngine:
                 continue   # original order still working
             top = rt.books[side]
             if top.ask is None:
+                continue
+            # Repair re-places the leg at the CURRENT ask, so after a move it can pay
+            # far more than intended (a 0.52 leg was once repaired at 0.80, which alone
+            # pushed that cycle's combined average to 1.23). Abandon instead of chasing.
+            quoted = pos.base_price[side]
+            if quoted and top.ask > quoted + self.s.repair_max_slip:
+                pos.base_retried[side] = True
+                self.hub.note(f"base leg repair abandoned ({side.value} quoted "
+                              f"{quoted:.2f}, now {top.ask:.2f}) - not chasing")
                 continue
             pos.base_retried[side] = True
             intents.append(OrderIntent(
@@ -192,6 +225,15 @@ class SignalEngine:
     # ---- layer 2: momentum skew ------------------------------------------------
     def _skew(self, rt, fair_of: dict, t_rem: float) -> list[OrderIntent]:
         m, pos = rt.market, rt.position
+        if not self.s.skew_enabled:
+            rt.confluence_dir = 0
+            return []
+        # Same fail-closed discipline as the ladder: a directional, unhedged bet needs
+        # a classified market. Too few in-window bars means the fair value rests on a
+        # handful of prints, which is how sub-basis-point noise became false conviction.
+        if rt.regime is None or not rt.regime.known:
+            rt.confluence_dir = 0
+            return []
         if t_rem < self.s.final_blackout_s or pos.skew_bought >= self.s.max_skew_shares:
             rt.confluence_dir = 0 if t_rem < self.s.final_blackout_s else rt.confluence_dir
             return []

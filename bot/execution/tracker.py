@@ -20,6 +20,7 @@ class Position:
     tp_pending: dict[int, float] = field(default_factory=dict)  # intent.id -> level, until outcome known
     base_placed: bool = False
     base_retried: dict[Side, bool] = field(default_factory=lambda: {Side.YES: False, Side.NO: False})
+    base_price: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     realized: float = 0.0                       # from sells before resolution
     fees_paid: float = 0.0
     fills: list[Fill] = field(default_factory=list)

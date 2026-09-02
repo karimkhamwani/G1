@@ -15,6 +15,10 @@ log = logging.getLogger("spot")
 
 SYMBOL = {"BTC": "btcusdt", "ETH": "ethusdt"}
 
+MAX_BAR_STEP_S = 5.0        # a step longer than this spans a feed gap: not a valid return
+MIN_VOL_SAMPLES = 60        # usable returns required before sigma is trusted
+MIN_CREDIBLE_SIGMA = 5e-6   # below this the tape has stalled; treat sigma as unknown
+
 
 def _ssl_context() -> ssl.SSLContext:
     """Default verification, minus Python 3.13's VERIFY_X509_STRICT (some exchange
@@ -63,19 +67,39 @@ class SpotState:
         return time.time() - self.ts if self.ts else float("inf")
 
     def sigma_per_sqrt_s(self) -> float:
-        """Stdev of 1s log returns over the vol window (cached for 1s)."""
+        """Per-sqrt-second stdev of log returns over the vol window (cached for 1s).
+
+        Returns 0.0 when the estimate is not trustworthy — the caller MUST treat that
+        as "no volatility estimate" and refuse to trade, never as "zero volatility".
+        A gappy feed used to collapse this number (returns were taken between
+        consecutive stored bars regardless of the seconds between them, and thin
+        stretches contribute runs of identical prices), which saturated the fair-value
+        CDF and turned sub-basis-point noise into false conviction.
+        """
         now = time.time()
         if now - self._sigma_cache[0] < 1.0:
             return self._sigma_cache[1]
         cutoff = now - self.vol_window_s
-        closes = [c for t, c in self.bars if t >= cutoff]
-        if len(closes) < 30:
+        win = [(t, c) for t, c in self.bars if t >= cutoff]
+        rets = []
+        for (t0, c0), (t1, c1) in zip(win, win[1:]):
+            dt = t1 - t0
+            # skip steps that span a feed gap: they are not 1s observations
+            if 0 < dt <= MAX_BAR_STEP_S and c0 > 0 and c1 > 0:
+                rets.append(math.log(c1 / c0) / math.sqrt(dt))
+        if len(rets) < MIN_VOL_SAMPLES:
             self._sigma_cache = (now, 0.0)
             return 0.0
-        rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1] > 0]
-        sig = statistics.pstdev(rets) if len(rets) > 2 else 0.0
+        sig = statistics.pstdev(rets)
+        if sig < MIN_CREDIBLE_SIGMA:
+            # a near-zero reading means a stalled tape, not a calm market
+            sig = 0.0
         self._sigma_cache = (now, sig)
         return sig
+
+    def vol_ready(self) -> bool:
+        """True when there is a usable volatility estimate."""
+        return self.sigma_per_sqrt_s() > 0.0
 
     def drift_per_s(self) -> float:
         """Blend of the momentum EWMAs (log-return rate per second)."""
