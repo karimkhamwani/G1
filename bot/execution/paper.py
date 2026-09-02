@@ -116,7 +116,7 @@ class PaperExecutor:
             self.recorder.log("order", {"id": intent.id, "market_id": intent.market_id,
                                         "side": intent.side.value, "action": intent.action.value,
                                         "price": intent.price, "shares": intent.shares,
-                                        "signal": intent.signal.value, "type": "FAK",
+                                        "signal": intent.signal.value, "order_type": "FAK",
                                         "status": order.status.value})
 
     def _sweep(self, now: float) -> None:

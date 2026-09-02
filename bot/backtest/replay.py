@@ -79,7 +79,7 @@ class SimExecutor:
         """Remove a working order and notify the hub (re-arms one-shot state like TP levels)."""
         if r in self.resting:
             self.resting.remove(r)
-        self.hub.order_closed(r["i"], r["filled"])
+        self.hub.order_closed(r["i"], r["filled"], now=self.now)
 
     def cancel_market(self, market_id: str, why: str = "") -> int:
         doomed = [r for r in self.resting if r["i"].market_id == market_id]

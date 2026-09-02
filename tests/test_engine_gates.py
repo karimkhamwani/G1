@@ -236,3 +236,28 @@ def test_window_age_gate_blocks_early_adds():
                                       fills, start_offset=5)  # window only 5s old
     eng.evaluate(rt)
     assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
+
+
+def test_failed_order_backoff_blocks_refire():
+    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    _, hub, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35), fills)
+    n1 = len(eng.evaluate(rt))
+    assert n1 == 1                      # the NO scale-add fires
+    intent = ex.intents[-1]
+    hub.order_closed(intent, 0.0)       # order died unfilled -> side backs off
+    rt.last_eval_ts = 0
+    assert eng.evaluate(rt) == []       # still-true trigger held back by backoff
+    rt.position.blocked_until[intent.side] = 0.0   # backoff expires
+    rt.last_eval_ts = 0
+    assert len(eng.evaluate(rt)) == 1   # now it may retry
+
+
+def test_min_notional_bumps_cheap_buys():
+    # NO ask at 0.12: 5 shares = $0.60 < $1 minimum -> bumped to 9 shares (~$1.08)
+    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.30, 20)]
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.86, 0.88), top(0.10, 0.12), fills)
+    eng.evaluate(rt)
+    for i in ex.intents:
+        assert i.price * i.shares >= 1.0, (i.signal, i.price, i.shares)

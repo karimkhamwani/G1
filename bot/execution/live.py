@@ -225,14 +225,31 @@ class LiveExecutor:
                                             "market_id": intent.market_id, "side": intent.side.value,
                                             "action": intent.action.value, "price": price,
                                             "shares": intent.shares, "signal": intent.signal.value,
-                                            "type": order_type, "status": "PLACED",
+                                            "order_type": order_type, "status": "PLACED",
                                             "latency_ms": latency_ms})
                 log.info("placed %s %s %.1f @ %.3f (%s, %dms signal->exchange)",
                          intent.action.value, intent.side.value, intent.shares, price,
                          order_type, latency_ms)
             except Exception as e:  # noqa: BLE001
+                if "no orders found to match" in str(e).lower():
+                    # NOT an error: this is FAK's normal no-liquidity outcome — the
+                    # order was killed unfilled, exactly as designed. Never let it
+                    # feed the error counter/cooldown (that silently drops the next
+                    # orders for up to 30s).
+                    self.recorder.log("order", {"id": intent.id, "market_id": intent.market_id,
+                                                "side": intent.side.value,
+                                                "signal": intent.signal.value,
+                                                "status": "FAK_NO_MATCH"})
+                    log.info("FAK no match: %s %s %.0f sh (no liquidity at limit)",
+                             intent.action.value, intent.side.value, intent.shares)
+                    self.hub.order_closed(intent, 0.0)
+                    return
                 self._consec_errors += 1
                 self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)
+                if "not enough balance" in str(e).lower():
+                    self.hub.note("insufficient balance/allowance: free USDC is likely "
+                                  "locked in UNREDEEMED winnings - redeem resolved "
+                                  "positions in the Polymarket UI")
                 log.error("order placement failed (%d consecutive): %s", self._consec_errors, e)
                 self.recorder.log("order_error", {"id": intent.id, "error": str(e)[:200],
                                                   "consecutive": self._consec_errors})

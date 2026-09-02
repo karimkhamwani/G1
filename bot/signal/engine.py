@@ -6,6 +6,7 @@ mode, and in backtest replay.
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time
 
@@ -99,6 +100,10 @@ class SignalEngine:
                                            "signal": intent.signal.value,
                                            "why": "below_min_order_size"})
                 continue
+            # marketable orders need >= $1 notional (a 5-share buy at 17c is $0.85 and
+            # gets rejected) — bump the share count to clear it
+            if intent.action is Action.BUY and intent.notional < 1.0:
+                intent.shares = float(math.ceil(1.02 / intent.price))
             verdict = self.risk.validate(intent, rt)
             if verdict is None:
                 self.recorder.log("signal", {
@@ -125,7 +130,12 @@ class SignalEngine:
     # ---- pending-order gate ---------------------------------------------------
     def _pending(self, market_id: str, side: Side) -> float:
         """Shares still open at the executor for this market/side — blocks a trigger
-        from re-firing during order latency (the duplicate-order bug)."""
+        from re-firing during order latency (the duplicate-order bug). Also treats a
+        side in post-failure backoff as pending, so a still-true trigger doesn't
+        re-fire every eval into the same rejection."""
+        rt = self.hub.markets.get(market_id)
+        if rt and self.clock() < rt.position.blocked_until.get(side, 0.0):
+            return 1.0
         open_shares = getattr(self.executor, "open_shares", None)
         return open_shares(market_id, side) if open_shares else 0.0
 
@@ -299,6 +309,10 @@ class SignalEngine:
         pos = rt.position
         side = pos.skew_side
         if side is None or pos.skew_shares <= 0:
+            return []
+        if self.clock() < pos.blocked_until.get(side, 0.0):
+            return []   # backing off after a failed sell — don't spam re-fires
+        if self._pending(rt.market.condition_id, side) > 0.5:
             return []
         top = rt.books[side]
         if top.bid is None:

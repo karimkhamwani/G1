@@ -77,12 +77,13 @@ class Hub:
         self.fills.appendleft(rec)
         return rec
 
-    def order_closed(self, intent, filled_shares: float) -> None:
+    def order_closed(self, intent, filled_shares: float, now: float | None = None) -> None:
         """Executor callback: an order reached a terminal state (cancel/TTL/reject/
-        drop) — lets the position re-arm one-shot state consumed at intent time."""
+        drop) — lets the position re-arm one-shot state consumed at intent time.
+        `now` lets the backtest pass event time (real time would poison its backoffs)."""
         rt = self.markets.get(intent.market_id)
         if rt:
-            rt.position.order_closed(intent, filled_shares)
+            rt.position.order_closed(intent, filled_shares, now)
 
     def book_pnl(self, amount: float) -> None:
         self.session_pnl += amount

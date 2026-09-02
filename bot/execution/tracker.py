@@ -21,6 +21,7 @@ class Position:
     base_placed: bool = False
     base_retried: dict[Side, bool] = field(default_factory=lambda: {Side.YES: False, Side.NO: False})
     base_price: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
+    blocked_until: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     realized: float = 0.0                       # from sells before resolution
     fees_paid: float = 0.0
     fills: list[Fill] = field(default_factory=list)
@@ -49,9 +50,17 @@ class Position:
         self.fees_paid += f.fee
         self.fills.append(f)
 
-    def order_closed(self, intent, filled_shares: float) -> None:
+    RETRY_BACKOFF_S = 3.0   # after a zero-fill order, hold that side's triggers briefly
+
+    def order_closed(self, intent, filled_shares: float, now: float | None = None) -> None:
         """An order died at the executor (cancel/TTL/reject/drop). Re-arm one-shot
-        state that was consumed at intent time but never produced a fill."""
+        state that was consumed at intent time but never produced a fill — but back
+        off briefly, or the still-true trigger re-fires every eval into the same
+        wall (the 130-signals-in-one-market spam seen live)."""
+        if filled_shares < 0.5:
+            import time as _time
+            self.blocked_until[intent.side] = (now if now is not None else _time.time()) \
+                + self.RETRY_BACKOFF_S
         if intent.signal is SignalType.TAKE_PROFIT and filled_shares < 0.5:
             level = self.tp_pending.pop(intent.id, None)
             if level is not None:
