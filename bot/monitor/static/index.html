@@ -153,7 +153,8 @@ function cards(s){
             <td>filled N</td><td class="${fillCls(p.no_bought,p.no_ordered)}">${filled(p.no_bought,p.no_ordered,p.no_fills)}</td></tr>
         <tr><td>skew L2</td><td>${p.skew_side?p.skew_side+' '+p.skew_bought:'–'}</td>
             <td>net side</td><td>${p.net_side?p.net_side+' '+p.net_shares:'flat'}</td></tr>
-        <tr><td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td><td></td><td></td></tr>
+        <tr><td>adds</td><td>Y${p.adds_yes}/N${p.adds_no}</td>
+            <td>fill</td><td class="${p.fill_rate==null?'dim':p.fill_rate>=0.8?'pos':p.fill_rate>=0.5?'':'neg'}">${p.fill_rate==null?'–':(p.fill_rate*100).toFixed(0)+'%'}</td></tr>
         <tr><td>uPnL</td><td class="${cls(p.unrealized)}">${fmt(p.unrealized)}</td><td></td><td></td></tr>
       </table>`}
     </div>`}).join('');

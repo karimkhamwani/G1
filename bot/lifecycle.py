@@ -101,6 +101,9 @@ class Lifecycle:
             "fees_paid": round(rt.position.fees_paid, 4),
             "regime": rt.regime.label if rt.regime else "-",
             "fills": len(rt.position.fills),
+            "fill_rate": (lambda o, b: round(b / o, 3) if o > 0 else None)(
+                rt.position.ordered[Side.YES] + rt.position.ordered[Side.NO],
+                rt.position.bought[Side.YES] + rt.position.bought[Side.NO]),
             "settlement": settlement,
         }
         self.hub.history.append(record)

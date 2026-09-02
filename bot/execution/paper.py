@@ -99,25 +99,25 @@ class PaperExecutor:
             top = rt.books[intent.side]
             if intent.action is Action.SELL:
                 if top.bid is not None:
-                    shares = min(intent.shares, max(top.bid_size, 1.0))
+                    shares = min(intent.shares, top.bid_size)   # no fill floor: visible size only
                     self._fill(order, top.bid, shares, taker=True)
-                else:
+                if order.filled_shares <= 0:
                     self._cancel(order, "no bid to sell into")
                 continue
-            # BUY: marketable on arrival?
-            if top.ask is not None and top.ask <= intent.price:
-                shares = min(intent.shares, max(top.ask_size, 1.0))
+            # BUY: FAK semantics, mirroring live — fill what the book shows at the
+            # cross-buffered limit, then kill the remainder (no resting buys)
+            limit = min(0.99, intent.price + self.s.order_cross_ticks * 0.01)
+            if top.ask is not None and top.ask <= limit:
+                shares = min(intent.shares, top.ask_size)       # no fill floor
                 self._fill(order, top.ask, shares, taker=True)
-                if order.remaining > 0.5:
-                    order.status = OrderStatus.RESTING
-                else:
-                    continue
-            else:
-                order.status = OrderStatus.RESTING
+            if order.remaining > 0.5:
+                self._cancel(order, "fak remainder killed" if order.filled_shares > 0
+                             else "fak no fill")
             self.recorder.log("order", {"id": intent.id, "market_id": intent.market_id,
                                         "side": intent.side.value, "action": intent.action.value,
                                         "price": intent.price, "shares": intent.shares,
-                                        "signal": intent.signal.value, "status": order.status.value})
+                                        "signal": intent.signal.value, "type": "FAK",
+                                        "status": order.status.value})
 
     def _sweep(self, now: float) -> None:
         for oid, o in list(self.orders.items()):

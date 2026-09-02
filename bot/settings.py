@@ -63,11 +63,13 @@ class Settings(BaseSettings):
 
     # execution
     min_order_shares: float = 5    # Polymarket rejects orders below this size
+    order_cross_ticks: int = 2     # BUY limit = ask + this many ticks (slippage cap; keeps
+                                   # the order marketable despite placement latency)
     order_ttl_s: float = 10
     min_book_depth_usdc: float = 200
     take_profit_levels: str = "0.90,0.97"
     fast_cancel_spot_move: float = 0.0008
-    paper_latency_ms: int = 300
+    paper_latency_ms: int = 2000   # measured live placement latency (signal -> exchange)
 
     # endpoints
     clob_host: str = "https://clob.polymarket.com"

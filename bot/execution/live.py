@@ -173,16 +173,26 @@ class LiveExecutor:
             if self.hub.halted or rt is None or rt.resolved:
                 self.hub.order_closed(intent, 0.0)
                 return
+            # BUYs go out as FAK (fill-and-kill) with a small cross buffer: the limit is
+            # ask + N ticks so the order is still marketable after ~2s of placement
+            # latency (a limit fills at the MAKER's price, so the buffer is a slippage
+            # cap, not a cost), and whatever can't fill immediately dies instead of
+            # resting stale. SELLs (take-profit) rest as GTC at their level.
+            is_buy = intent.action is Action.BUY
+            price = intent.price
+            if is_buy:
+                price = min(0.99, price + self.s.order_cross_ticks * 0.01)
+            order_type = OrderType.FAK if is_buy else OrderType.GTC
             args = OrderArgs(
                 token_id=intent.token_id,
-                price=round(intent.price, 3),
+                price=round(price, 3),
                 size=round(intent.shares, 2),
                 side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
             )
             try:
                 signed = await loop.run_in_executor(None, self.client.create_order, args)
                 resp = await loop.run_in_executor(
-                    None, lambda: self.client.post_order(signed, order_type=OrderType.GTC))
+                    None, lambda: self.client.post_order(signed, order_type=order_type))
                 oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
                 if not oid:
                     log.warning("order rejected: %s", resp)
@@ -197,9 +207,9 @@ class LiveExecutor:
                 self._consec_errors = 0
                 self.recorder.log("order", {"id": intent.id, "exchange_id": oid,
                                             "market_id": intent.market_id, "side": intent.side.value,
-                                            "action": intent.action.value, "price": intent.price,
+                                            "action": intent.action.value, "price": round(price, 3),
                                             "shares": intent.shares, "signal": intent.signal.value,
-                                            "status": "RESTING"})
+                                            "type": order_type, "status": "PLACED"})
             except Exception as e:  # noqa: BLE001
                 self._consec_errors += 1
                 self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)
@@ -345,7 +355,10 @@ class LiveExecutor:
         self.recorder.log("fill", rec)
         log.info("LIVE FILL %s %s %.1f @ %.3f", i.action.value, i.side.value, size, price)
 
-    # ---- ttl + fast-cancel sweep ------------------------------------------
+    # ---- order lifecycle sweep ------------------------------------------
+    FAK_REAP_S = 4.0   # a FAK is dead at the exchange instantly; its fills arrive via
+                       # the user channel within moments — after this long, finalize it
+
     async def _sweep_loop(self) -> None:
         while True:
             await asyncio.sleep(0.25)
@@ -357,15 +370,17 @@ class LiveExecutor:
                         self.orders.pop(oid, None)   # prune terminal orders
                     continue
                 i = o.intent
+                if i.action is Action.BUY:
+                    # FAK: already dead at the exchange — no cancel needed, just
+                    # finalize once its fills have had time to stream in
+                    if now - o.placed_ts > self.FAK_REAP_S:
+                        o.status = (OrderStatus.FILLED if o.filled_shares > 0
+                                    else OrderStatus.CANCELLED)
+                        self.hub.order_closed(i, o.filled_shares)
+                        if o.filled_shares <= 0:
+                            self.recorder.log("cancel", {"exchange_id": oid,
+                                                         "why": "fak no fill"})
+                    continue
+                # GTC sells (take-profit): TTL as before
                 if now - o.placed_ts > self.s.order_ttl_s:
                     await self._cancel(oid, "ttl")
-                    continue
-                rt = self.hub.markets.get(i.market_id)
-                if rt is None:
-                    continue
-                spot = self.spots.get(rt.market.asset)
-                if spot and spot.price and o.spot_at_place and i.action is Action.BUY:
-                    move = (spot.price - o.spot_at_place) / o.spot_at_place
-                    adverse = -move if i.side.value == "YES" else move
-                    if adverse > self.s.fast_cancel_spot_move:
-                        await self._cancel(oid, f"fast-cancel {move:+.4%}")

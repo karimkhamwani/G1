@@ -141,6 +141,9 @@ class Hub:
                     "no_bought": round(p.bought[Side.NO], 2),
                     "yes_fills": p.fill_count[Side.YES],
                     "no_fills": p.fill_count[Side.NO],
+                    "fill_rate": (lambda o, b: round(b / o, 2) if o > 0 else None)(
+                        p.ordered[Side.YES] + p.ordered[Side.NO],
+                        p.bought[Side.YES] + p.bought[Side.NO]),
                     "unrealized": (lambda u: round(u, 2) if u is not None else None)(p.unrealized(rt.mid)),
                 },
             })

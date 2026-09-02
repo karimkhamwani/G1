@@ -126,28 +126,20 @@ class SimExecutor:
                         self._fill(r, top.bid, cap=top.bid_size)
                     self._drop(r)   # sells don't rest (same as paper mode)
                     continue
-                if top.ask is not None and top.ask <= i.price:
-                    # partial marketable fill: the remainder keeps RESTING, same as
-                    # paper mode — discarding it made backtest fills diverge
+                # BUY: FAK semantics, same as paper/live — fill what's visible at the
+                # cross-buffered limit, then kill the remainder (no resting buys)
+                limit = min(0.99, i.price + self.s.order_cross_ticks * 0.01)
+                if top.ask is not None and top.ask <= limit:
                     self._fill(r, top.ask, cap=top.ask_size)
-                    continue
-            if now - r["placed"] > self.s.order_ttl_s:
                 self._drop(r)
                 continue
-            if i.action is Action.BUY and top.ask is not None and top.ask < i.price:
-                self._fill(r, i.price)
-                continue
-            spot = self.spots.get(rt.market.asset)
-            if spot and spot.price and r["spot"]:
-                move = (spot.price - r["spot"]) / r["spot"]
-                adverse = -move if i.side is Side.YES else move
-                if i.action is Action.BUY and adverse > self.s.fast_cancel_spot_move:
-                    self._drop(r)
+            if now - r["placed"] > self.s.order_ttl_s:
+                self._drop(r)
 
     def _fill(self, r: dict, price: float, cap: float | None = None) -> None:
         i = r["i"]
         remaining = i.shares - r["filled"]
-        shares = min(remaining, max(cap, 1.0)) if cap is not None else remaining
+        shares = min(remaining, cap) if cap is not None else remaining  # no fill floor
         if shares <= 0:
             return
         self.hub.on_fill(Fill(market_id=i.market_id, side=i.side, action=i.action,
