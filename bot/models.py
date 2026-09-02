@@ -46,6 +46,8 @@ class Market:
     end_ts: float
     token: dict[Side, str]   # Side -> CLOB token id
     strike: float | None = None      # spot at window open (captured live)
+    tick_size: float = 0.01          # price grid (from Gamma orderPriceMinTickSize)
+    neg_risk: bool = False           # which exchange contract orders are signed for
 
     def side_of_token(self, token_id: str) -> Side | None:
         for s, t in self.token.items():
@@ -99,6 +101,7 @@ class OrderIntent:
     signal: SignalType
     reason: str = ""
     id: int = field(default_factory=lambda: next(_intent_seq))
+    created_ts: float = field(default_factory=time.time)   # for placement-latency telemetry
 
     @property
     def notional(self) -> float:

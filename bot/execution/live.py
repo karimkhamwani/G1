@@ -166,6 +166,7 @@ class LiveExecutor:
     # ---- order placement ------------------------------------------------
     async def _place(self, intent: OrderIntent) -> None:
         from py_clob_client_v2 import OrderArgs, OrderType
+        from py_clob_client_v2.clob_types import PartialCreateOrderOptions
         loop = asyncio.get_running_loop()
         try:
             # conditions may have changed while this task waited to run
@@ -179,20 +180,31 @@ class LiveExecutor:
             # cap, not a cost), and whatever can't fill immediately dies instead of
             # resting stale. SELLs (take-profit) rest as GTC at their level.
             is_buy = intent.action is Action.BUY
+            tick = rt.market.tick_size or 0.01
             price = intent.price
             if is_buy:
-                price = min(0.99, price + self.s.order_cross_ticks * 0.01)
+                price = min(1.0 - tick, price + self.s.order_cross_ticks * tick)
+            price = round(round(price / tick) * tick, 4)   # snap to the market's grid
             order_type = OrderType.FAK if is_buy else OrderType.GTC
             args = OrderArgs(
                 token_id=intent.token_id,
-                price=round(price, 3),
+                price=price,
                 size=round(intent.shares, 2),
                 side=intent.action.value,        # v2 takes "BUY"/"SELL" strings
             )
+            # tick size + neg_risk come from discovery, so create_order signs locally
+            # with ZERO metadata round-trips — the POST is the only network hop left
+            options = PartialCreateOrderOptions(tick_size=f"{tick:g}",
+                                                neg_risk=rt.market.neg_risk)
+            def _sign_and_post():
+                # both steps in ONE background thread: signing is ~1ms local CPU and
+                # posting strictly depends on it, so a second thread handoff between
+                # them would only add latency
+                signed = self.client.create_order(args, options)
+                return self.client.post_order(signed, order_type=order_type)
+
             try:
-                signed = await loop.run_in_executor(None, self.client.create_order, args)
-                resp = await loop.run_in_executor(
-                    None, lambda: self.client.post_order(signed, order_type=order_type))
+                resp = await loop.run_in_executor(None, _sign_and_post)
                 oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
                 if not oid:
                     log.warning("order rejected: %s", resp)
@@ -205,11 +217,16 @@ class LiveExecutor:
                               spot_at_place=spot.price if spot else None, exchange_id=oid)
                 self.orders[oid] = order
                 self._consec_errors = 0
+                latency_ms = round((time.time() - intent.created_ts) * 1000)
                 self.recorder.log("order", {"id": intent.id, "exchange_id": oid,
                                             "market_id": intent.market_id, "side": intent.side.value,
-                                            "action": intent.action.value, "price": round(price, 3),
+                                            "action": intent.action.value, "price": price,
                                             "shares": intent.shares, "signal": intent.signal.value,
-                                            "type": order_type, "status": "PLACED"})
+                                            "type": order_type, "status": "PLACED",
+                                            "latency_ms": latency_ms})
+                log.info("placed %s %s %.1f @ %.3f (%s, %dms signal->exchange)",
+                         intent.action.value, intent.side.value, intent.shares, price,
+                         order_type, latency_ms)
             except Exception as e:  # noqa: BLE001
                 self._consec_errors += 1
                 self._cooldown_until = time.time() + min(2 * self._consec_errors, 30)

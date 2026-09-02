@@ -129,4 +129,9 @@ class Discovery:
             condition_id=cid, slug=slug, question=row.get("question") or slug,
             asset=asset, duration_s=dur, start_ts=start, end_ts=end,
             token={Side.YES: str(tokens[yes_idx]), Side.NO: str(tokens[1 - yes_idx])},
+            # captured here so live order creation needs NO metadata fetch (zero-prereq
+            # signing): tick size validates the price grid, neg_risk picks the contract
+            # the EIP-712 signature is bound to
+            tick_size=float(row.get("orderPriceMinTickSize") or 0.01),
+            neg_risk=bool(row.get("negRisk")),
         )
