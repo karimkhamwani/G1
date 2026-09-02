@@ -51,6 +51,9 @@ class App:
         self.engine.kick_asset(asset)
 
     def _on_new_market(self, market) -> None:
+        if market.condition_id in self.hub.markets:
+            # never overwrite a live runtime — that would wipe position state mid-window
+            return
         rt = MarketRuntime(market=market)
         self.hub.markets[market.condition_id] = rt
         feed = MarketBookFeed(self.settings, self.hub, self.recorder, rt,

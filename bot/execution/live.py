@@ -156,6 +156,8 @@ class LiveExecutor:
             self.hub.note("startup: cancelled any orders left by a previous run")
         except Exception as e:  # noqa: BLE001
             log.error("startup cancel_all failed: %s — orphaned orders may exist!", e)
+            self.recorder.log("cancel_all_failed", {"why": "startup reconciliation",
+                                                    "error": str(e)[:200]})
             self.hub.note(f"WARNING: startup order cleanup failed ({e}) — check the "
                           "Polymarket UI for orphaned orders")
         self.hub.note("note: positions from previous runs are NOT tracked — "

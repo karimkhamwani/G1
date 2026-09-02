@@ -94,6 +94,11 @@ class SignalEngine:
         m = rt.market
         submitted = []
         for intent in intents:
+            if intent.shares < self.s.min_order_shares:
+                self.recorder.log("veto", {"market_id": m.condition_id,
+                                           "signal": intent.signal.value,
+                                           "why": "below_min_order_size"})
+                continue
             verdict = self.risk.validate(intent, rt)
             if verdict is None:
                 self.recorder.log("signal", {
@@ -209,7 +214,7 @@ class SignalEngine:
                 continue
             step = self.s.add_step_shares * (decay ** pos.adds_used[side])
             step *= 1.0 + self.rng.uniform(-self.s.add_jitter_pct, self.s.add_jitter_pct)
-            shares = max(1.0, round(step, 1))
+            shares = max(self.s.min_order_shares, round(step, 1))  # exchange minimum
             if pos.shares[side] + shares > self.s.max_shares_per_side:
                 continue
             price = round(top.ask * (1.0 + self.rng.uniform(0, 0.01)), 3)  # tiny price jitter
@@ -272,7 +277,9 @@ class SignalEngine:
             return []
         step = self.s.skew_step_shares * (1.0 + self.rng.uniform(-self.s.add_jitter_pct,
                                                                  self.s.add_jitter_pct))
-        shares = max(1.0, round(min(step, self.s.max_skew_shares - pos.skew_bought), 1))
+        shares = round(min(step, self.s.max_skew_shares - pos.skew_bought), 1)
+        if shares < self.s.min_order_shares:
+            return []   # remaining cap is below the exchange minimum order size
         # respect the per-side cap here instead of spamming risk vetoes
         if pos.shares[side] + shares > self.s.max_shares_per_side:
             return []
@@ -293,12 +300,16 @@ class SignalEngine:
         if top.bid is None:
             return []
         intents = []
+        if pos.skew_shares < self.s.min_order_shares:
+            return []   # too small to sell: the exchange rejects sub-minimum orders
         for i, level in enumerate(self.s.tp_levels):
             if level in pos.tp_taken or top.bid < level:
                 continue
-            # first level sells half the skew, last level sells the rest
+            # first level sells half the skew, last level sells the rest —
+            # bumped to the exchange minimum (a 2.5-share sell gets rejected)
             frac = 0.5 if i < len(self.s.tp_levels) - 1 else 1.0
-            shares = round(pos.skew_shares * frac, 1)
+            shares = round(min(max(pos.skew_shares * frac, self.s.min_order_shares),
+                               pos.skew_shares), 1)
             if shares < 1:
                 continue
             intent = OrderIntent(

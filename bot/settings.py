@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     dashboard_host: str = "127.0.0.1"
 
     # execution
+    min_order_shares: float = 5    # Polymarket rejects orders below this size
     order_ttl_s: float = 10
     min_book_depth_usdc: float = 200
     take_profit_levels: str = "0.90,0.97"
