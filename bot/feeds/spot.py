@@ -13,7 +13,8 @@ import websockets
 
 log = logging.getLogger("spot")
 
-SYMBOL = {"BTC": "btcusdt", "ETH": "ethusdt"}
+SYMBOL = {"BTC": "btcusdt", "ETH": "ethusdt", "SOL": "solusdt",
+          "BNB": "bnbusdt", "XRP": "xrpusdt", "DOGE": "dogeusdt"}
 
 MAX_BAR_STEP_S = 5.0        # a step longer than this spans a feed gap: not a valid return
 MIN_VOL_SAMPLES = 60        # usable returns required before sigma is trusted
@@ -123,6 +124,11 @@ class SpotFeed:
             a: SpotState(a, settings.vol_window_min * 60, settings.ewma_taus)
             for a in settings.asset_list if a in SYMBOL
         }
+        unmapped = [a for a in settings.asset_list if a not in SYMBOL]
+        if unmapped:
+            log.error("no Binance symbol mapping for %s - these assets will NOT be "
+                      "priced or traded (add them to SYMBOL in feeds/spot.py)", unmapped)
+            hub.note(f"ignoring unmapped assets: {unmapped}")
 
     async def run(self) -> None:
         streams = "/".join(f"{SYMBOL[a]}@trade" for a in self.states)
