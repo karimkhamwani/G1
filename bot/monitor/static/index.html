@@ -94,6 +94,10 @@ button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
       <h2>Log</h2>
       <div class="notes" id="notes"></div>
     </div>
+    <div class="panel" style="margin-top:12px">
+      <h2>Upcoming markets</h2>
+      <table class="list" id="upcoming"><tbody></tbody></table>
+    </div>
   </div>
 </main>
 
@@ -176,6 +180,10 @@ function tape(s){
      <td class="${cls(h.l1)}">${fmt(h.l1)}</td><td class="${cls(h.l2)}">${fmt(h.l2)}</td>
      <td>${fmt(h.combined_avg,3)}</td><td>${h.regime}</td></tr>`).join('');
   $('notes').innerHTML=s.notes.map(n=>`<div>${n}</div>`).join('');
+  $('upcoming').tBodies[0].innerHTML=(s.upcoming&&s.upcoming.length)?s.upcoming.map(u=>
+    `<tr><td style="max-width:230px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${u.question}">${u.question}</td>
+     <td class="dim">in ${Math.floor(u.starts_in/60)}:${String(u.starts_in%60).padStart(2,'0')}</td></tr>`).join('')
+    :'<tr><td class="dim">none discovered yet</td></tr>';
 }
 
 function equity(s){

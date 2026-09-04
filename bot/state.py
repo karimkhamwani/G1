@@ -109,8 +109,17 @@ class Hub:
     def snapshot(self, spots: dict | None = None) -> dict:
         now = time.time()
         active_cards = []
+        upcoming = []
         for rt in self.markets.values():
             if rt.resolved:
+                continue
+            if now < rt.market.start_ts:
+                upcoming.append({
+                    "question": rt.market.question,
+                    "asset": rt.market.asset,
+                    "duration": rt.market.duration_s,
+                    "starts_in": round(rt.market.start_ts - now),
+                })
                 continue
             p, m = rt.position, rt.market
             active_cards.append({
@@ -167,6 +176,7 @@ class Hub:
                       for name in self.feed_ts},
             "spots": spots or {},
             "markets": active_cards,
+            "upcoming": sorted(upcoming, key=lambda u: u["starts_in"]),
             "fills": list(self.fills)[:60],
             "equity": [[round(t, 1), round(v, 2)] for t, v in self.equity_curve],
             "history": [{
