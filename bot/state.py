@@ -22,6 +22,9 @@ class MarketRuntime:
     fair_yes: float | None = None
     confluence_dir: int = 0            # +1 YES, -1 NO, 0 none
     skipped: str | None = None         # reason this market is not traded (e.g. joined late)
+    awaiting_official: bool = False    # window closed; polling Gamma for the official result
+    close_spot: float | None = None    # spot at window close (reference/fallback only)
+    next_official_poll: float = 0.0
     resolved: bool = False
     winner: Side | None = None
     resolution_pnl: float | None = None

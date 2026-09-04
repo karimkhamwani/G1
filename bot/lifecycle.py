@@ -1,18 +1,52 @@
-"""Market lifecycle: strike capture at window open, resolution at window close."""
+"""Market lifecycle: strike capture at window open, resolution at window close.
+
+Settlement is OFFICIAL-FIRST: the window's real result comes from Polymarket
+(Gamma `outcomePrices` once `umaResolutionStatus=resolved`) because the oracle is a
+Chainlink 60s TWAP — the last Binance tick can disagree in the final seconds (a
+last-second dip barely moves a 60s TWAP), which used to book winning trades as
+losses. The spot proxy is only a timeout fallback.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+
+import aiohttp
 
 from bot.models import Side
 
 log = logging.getLogger("lifecycle")
 
 STRIKE_GRACE_S = 5        # how late we may still capture the open price
-RESOLVE_DELAY_S = 3       # settle a moment after close so the last spot bar lands
-SETTLE_MAX_STALE_S = 5    # close price must be at most this old to settle
-SETTLE_TIMEOUT_S = 90     # give up waiting for a fresh price after this long
+RESOLVE_DELAY_S = 3       # start settling a moment after close
+OFFICIAL_POLL_S = 10      # how often to ask Gamma for the official result
+OFFICIAL_TIMEOUT_S = 300  # fall back to the spot proxy after this long
+UA = {"User-Agent": "Mozilla/5.0 (momentum-bot)"}
+
+
+def official_winner(row: dict) -> Side | None:
+    """Map a Gamma market row to the official winner, or None if not resolved yet."""
+    if not row or not row.get("closed"):
+        return None
+    if str(row.get("umaResolutionStatus") or "").lower() != "resolved":
+        return None
+    try:
+        outcomes = row.get("outcomes")
+        prices = row.get("outcomePrices")
+        outcomes = json.loads(outcomes) if isinstance(outcomes, str) else (outcomes or [])
+        prices = json.loads(prices) if isinstance(prices, str) else (prices or [])
+        prices = [float(x) for x in prices]
+    except (ValueError, TypeError):
+        return None
+    if len(outcomes) != 2 or len(prices) != 2 or max(prices) < 0.99:
+        return None
+    up_idx = 0
+    for i, o in enumerate(outcomes[:2]):
+        if str(o).strip().lower() in ("up", "yes"):
+            up_idx = i
+    return Side.YES if prices[up_idx] >= 0.99 else Side.NO
 
 
 class Lifecycle:
@@ -23,15 +57,35 @@ class Lifecycle:
         self.executor = executor
         self.recorder = recorder
         self.risk = risk
+        self._http: aiohttp.ClientSession | None = None
 
     async def run(self) -> None:
-        while True:
-            await asyncio.sleep(0.5)
-            now = time.time()
-            for rt in list(self.hub.markets.values()):
-                self._capture_strike(rt, now)
-                self._resolve(rt, now)
-            self._prune(now)
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                now = time.time()
+                for rt in list(self.hub.markets.values()):
+                    self._capture_strike(rt, now)
+                    await self._resolve(rt, now)
+                self._prune(now)
+        finally:
+            if self._http:
+                await self._http.close()
+
+    async def _fetch_official(self, m) -> Side | None:
+        if self._http is None:
+            self._http = aiohttp.ClientSession(headers=UA)
+        try:
+            async with self._http.get(f"{self.s.gamma_host}/markets",
+                                      params={"slug": m.slug, "closed": "true"},
+                                      timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status != 200:
+                    return None
+                rows = await resp.json()
+        except Exception as e:  # noqa: BLE001
+            log.debug("official fetch %s failed: %s", m.slug, e)
+            return None
+        return official_winner(rows[0]) if rows else None
 
     def _capture_strike(self, rt, now: float) -> None:
         m = rt.market
@@ -46,38 +100,42 @@ class Lifecycle:
             rt.skipped = "joined late - no reliable open price"
             self.recorder.log("skip", {"market_id": m.condition_id, "why": rt.skipped})
 
-    def _resolve(self, rt, now: float) -> None:
+    async def _resolve(self, rt, now: float) -> None:
         m = rt.market
         if rt.resolved or now < m.end_ts + RESOLVE_DELAY_S:
             return
-        self.executor.cancel_market(m.condition_id, "window closed")
-        if m.strike is None or rt.position.total_shares == 0:
-            rt.resolved = True
-            self.hub.markets.pop(m.condition_id, None)
+        if not rt.awaiting_official:
+            # window just closed: cancel working orders, snapshot the close spot for
+            # reference, and start polling for the OFFICIAL result
+            self.executor.cancel_market(m.condition_id, "window closed")
+            if m.strike is None or rt.position.total_shares == 0:
+                rt.resolved = True
+                self.hub.markets.pop(m.condition_id, None)
+                return
+            spot = self.spots.get(m.asset)
+            rt.close_spot = spot.price if spot and spot.stale < 10 else None
+            rt.awaiting_official = True
+            rt.next_official_poll = now
+        if now < rt.next_official_poll:
             return
-        spot = self.spots.get(m.asset)
-        settlement = "spot_proxy"
-        if spot is None or spot.price is None or spot.stale > SETTLE_MAX_STALE_S:
-            # a stale price can pick the WRONG winner — wait for a fresh tick,
-            # and only give up after a timeout with a conservative worst case
-            if now < m.end_ts + SETTLE_TIMEOUT_S:
-                return   # not resolved yet — retry next tick
-            self.hub.note(f"{m.slug[:40]}: no fresh close price after "
-                          f"{SETTLE_TIMEOUT_S}s - booking worst case, check manually")
+        rt.next_official_poll = now + OFFICIAL_POLL_S
+        winner = await self._fetch_official(m)
+        if winner is not None:
             rt.resolved = True
-            winner = min(Side, key=lambda s: rt.position.shares[s])  # worst case: fewer-shares side wins
-            close = None
-            settlement = "no_price_worst_case"
-            self._settle(rt, now, winner, close, settlement)
+            self._settle(rt, now, winner, rt.close_spot, "official")
             return
-        close = spot.price
-        rt.resolved = True
-        # NOTE: settles on Binance spot as an oracle PROXY. The real oracle can disagree;
-        # oracle-mismatch measurement is a backtest report item.
-        # Tie rule: these markets resolve UP only if close is strictly ABOVE the open —
-        # a tie is Down/NO (plan.md: "closes above the window's open price").
-        winner = Side.YES if close > m.strike else Side.NO
-        self._settle(rt, now, winner, close, settlement)
+        if now > m.end_ts + OFFICIAL_TIMEOUT_S:
+            # fallback: last-tick spot proxy (tie -> Down). Known to disagree with the
+            # Chainlink 60s-TWAP oracle near the close — flagged in the record.
+            rt.resolved = True
+            if rt.close_spot is not None and m.strike is not None:
+                winner = Side.YES if rt.close_spot > m.strike else Side.NO
+                self._settle(rt, now, winner, rt.close_spot, "spot_proxy_fallback")
+            else:
+                self.hub.note(f"{m.slug[:40]}: no official result and no close price - "
+                              "booking worst case, check manually")
+                winner = min(Side, key=lambda s: rt.position.shares[s])
+                self._settle(rt, now, winner, None, "no_price_worst_case")
 
     def _settle(self, rt, now: float, winner: Side, close, settlement: str) -> None:
         m = rt.market
@@ -115,5 +173,6 @@ class Lifecycle:
 
     def _prune(self, now: float) -> None:
         for cid, rt in list(self.hub.markets.items()):
+            # never prune a market still awaiting its official result
             if rt.resolved and now > rt.market.end_ts + 60:
                 self.hub.markets.pop(cid, None)

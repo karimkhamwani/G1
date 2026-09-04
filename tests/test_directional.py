@@ -192,3 +192,19 @@ def test_no_bets_in_first_30_seconds():
     _, _, rt2, ex2, eng2, _ = make_dir(100_150, top(0.72, 0.74), top(0.24, 0.26), start_offset=31)
     eng2.evaluate(rt2)
     assert len(dir_fills(ex2)) == 1
+
+
+def test_official_winner_parsing():
+    from bot.lifecycle import official_winner
+    up_won = {"closed": True, "umaResolutionStatus": "resolved",
+              "outcomes": '["Up", "Down"]', "outcomePrices": '["1", "0"]'}
+    down_won = {"closed": True, "umaResolutionStatus": "resolved",
+                "outcomes": '["Up", "Down"]', "outcomePrices": '["0", "1"]'}
+    not_yet = {"closed": True, "umaResolutionStatus": None,
+               "outcomes": '["Up", "Down"]', "outcomePrices": '["0.97", "0.03"]'}
+    still_open = {"closed": None}
+    assert official_winner(up_won) is Side.YES
+    assert official_winner(down_won) is Side.NO
+    assert official_winner(not_yet) is None
+    assert official_winner(still_open) is None
+    assert official_winner({}) is None

@@ -257,9 +257,13 @@ def run(paths: list[Path]) -> dict:
                 elif t == "resolved":
                     rt = hub.markets.get(ev["market_id"])
                     if rt and not rt.resolved:
-                        # tie rule: Up wins only strictly above the open
-                        winner = (Side.YES if ev.get("close") is not None
-                                  and ev["close"] > ev["strike"] else Side.NO)
+                        # prefer the OFFICIAL winner recorded by the live/paper run;
+                        # fall back to the tie-rule proxy for old logs
+                        if ev.get("winner") in ("YES", "NO"):
+                            winner = Side(ev["winner"])
+                        else:
+                            winner = (Side.YES if ev.get("close") is not None
+                                      and ev["close"] > ev["strike"] else Side.NO)
                         settle(rt, winner, "recorded")
     # settle anything still open at the end of the corpus
     settle_expired(clock["now"] + 10_000)
