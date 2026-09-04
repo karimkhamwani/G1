@@ -152,9 +152,11 @@ with all state journaled to disk.
   `DIR_STEP_SHARES` (5); further bets only while the threshold still holds AND
   confidence has risen by `DIR_CONF_STEP` since the last fill; total spend hard-capped
   at `DIR_MARKET_BUDGET_USDC` (10). FOK orders: an unfilled bet dies and is re-placed
-  at the fresh ask after a 1s backoff while the threshold holds. One side per market,
-  held to resolution. Safety: never pays an ask at/above the model's own fair value
-  (`DIR_REQUIRE_EDGE`).
+  at the fresh ask after a 1s backoff while the threshold holds. One side per market.
+  **Stop-loss**: if the held side's ask AND the model's confidence both fall to
+  ≤ `DIR_EXIT_BELOW` (0.45), sell everything at the bid and never re-enter that
+  market; otherwise hold to resolution. Optional `DIR_REQUIRE_EDGE` gate (off by
+  default) additionally refuses asks at/above the model's fair value.
 - **`STRATEGY=paired`** — the original two-layer design below.
 - On every spot tick or book update for an active market, emit up to three signal types:
   1. **`BaseEntrySignal`** — early in the cycle (within `entry_window_s` of open, spread

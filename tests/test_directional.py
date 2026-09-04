@@ -114,3 +114,50 @@ def test_never_bets_against_an_existing_position():
     _, _, rt, ex, eng, _ = make_dir(100_150, top(0.72, 0.74), top(0.24, 0.26), fills)
     eng.evaluate(rt)
     assert dir_fills(ex) == []
+
+
+def test_stop_loss_sells_all_when_book_and_model_collapse():
+    # we hold 5 YES @0.74; spot fell below strike -> fair_yes ~0.13; YES ask 0.40 <= 0.45
+    fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
+    _, _, rt, ex, eng, _ = make_dir(99_850, top(0.38, 0.40), top(0.58, 0.60), fills)
+    eng.evaluate(rt)
+    stops = [i for i in ex.intents if i.signal is SignalType.STOP_LOSS]
+    assert rt.fair_yes <= 0.45
+    assert len(stops) == 1 and stops[0].action is Action.SELL and stops[0].side is Side.YES
+    assert stops[0].shares == 5.0 and stops[0].price == 0.38     # everything, at the bid
+    assert rt.position.exit_pending
+    # once it fills, the market is marked stopped-out: no re-entry even if thresholds return
+    hub_fill = Fill("c1", Side.YES, Action.SELL, 0.38, 5, 0.0, SignalType.STOP_LOSS,
+                    order_id=stops[0].id)
+    rt.position.apply_fill(hub_fill)
+    assert rt.position.stopped_out and rt.position.shares[Side.YES] == 0.0
+    rt.books[Side.YES] = top(0.72, 0.74); rt.books[Side.NO] = top(0.24, 0.26)
+    eng.spots["BTC"].price = 100_150
+    rt.last_eval_ts = 0
+    eng.evaluate(rt)
+    assert dir_fills(ex) == []
+
+
+def test_stop_loss_needs_both_book_and_model_below():
+    fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
+    # book collapsed (ask 0.40) but the model still likes it (spot up -> fair ~0.87): hold
+    _, _, rt, ex, eng, _ = make_dir(100_150, top(0.38, 0.40), top(0.58, 0.60), fills)
+    eng.evaluate(rt)
+    assert not [i for i in ex.intents if i.signal is SignalType.STOP_LOSS]
+    # model collapsed (fair ~0.13) but the book still prices YES at 0.60: hold
+    _, _, rt2, ex2, eng2, _ = make_dir(99_850, top(0.58, 0.60), top(0.38, 0.40), fills)
+    eng2.evaluate(rt2)
+    assert not [i for i in ex2.intents if i.signal is SignalType.STOP_LOSS]
+
+
+def test_stop_loss_retries_if_sell_dies():
+    fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
+    _, hub, rt, ex, eng, _ = make_dir(99_850, top(0.38, 0.40), top(0.58, 0.60), fills)
+    eng.evaluate(rt)
+    first = [i for i in ex.intents if i.signal is SignalType.STOP_LOSS][0]
+    hub.order_closed(first, 0.0)          # sell died unfilled -> re-armed
+    assert not rt.position.exit_pending
+    rt.position.blocked_until[Side.YES] = 0.0
+    rt.last_eval_ts = 0
+    eng.evaluate(rt)
+    assert len([i for i in ex.intents if i.signal is SignalType.STOP_LOSS]) == 2

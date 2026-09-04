@@ -26,6 +26,7 @@ class SignalType(str, Enum):
     SKEW = "SKEW"
     TAKE_PROFIT = "TAKE_PROFIT"
     DIRECTIONAL = "DIRECTIONAL"   # one-sided conviction bet (STRATEGY=directional)
+    STOP_LOSS = "STOP_LOSS"       # directional exit: sell all when book AND model collapse
 
 
 LAYER_OF = {
@@ -34,6 +35,7 @@ LAYER_OF = {
     SignalType.SKEW: 2,
     SignalType.TAKE_PROFIT: 2,
     SignalType.DIRECTIONAL: 2,
+    SignalType.STOP_LOSS: 2,
 }
 
 

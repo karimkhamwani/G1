@@ -102,6 +102,27 @@ class SignalEngine:
         backoff, as long as the threshold still holds. One side per market, held to
         resolution."""
         m, pos = rt.market, rt.position
+        # STOP-LOSS first: if we hold a side and BOTH the book and the model have
+        # collapsed on it (ask and confidence <= DIR_EXIT_BELOW), sell everything
+        held = pos.skew_side   # the side we hold (directional positions are one-sided)
+        if held is not None and pos.shares[held] > 0 and not pos.exit_pending:
+            top_h = rt.books[held]
+            if (top_h.ask is not None and top_h.ask <= self.s.dir_exit_below
+                    and fair_of[held] <= self.s.dir_exit_below):
+                if top_h.bid is None:
+                    return []   # nothing to sell into right now; retry next eval
+                pos.exit_pending = True
+                shares = round(pos.shares[held], 2)
+                return [OrderIntent(
+                    market_id=m.condition_id, token_id=m.token[held], side=held,
+                    action=Action.SELL, price=top_h.bid, shares=shares,
+                    signal=SignalType.STOP_LOSS,
+                    reason=f"stop-loss: ask {top_h.ask:.2f} and conf {fair_of[held]:.2f} "
+                           f"<= {self.s.dir_exit_below:.2f}, selling all {shares:g}",
+                )]
+        if pos.stopped_out or pos.exit_pending:
+            rt.confluence_dir = 0
+            return []   # bailed out of this market: never re-enter it
         if t_rem < self.s.final_blackout_s:
             rt.confluence_dir = 0
             return []
