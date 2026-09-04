@@ -24,6 +24,8 @@ class Position:
     blocked_until: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     dir_last_fair: float = 0.0      # model confidence at the last FILLED directional bet
     dir_pending_fair: float = 0.0   # confidence at the last SUBMITTED bet (promoted on fill)
+    dir_last_ask: float = 0.0       # book ask at the last FILLED directional bet
+    dir_pending_ask: float = 0.0    # book ask at the last SUBMITTED bet (promoted on fill)
     exit_pending: bool = False      # a stop-loss sell is working
     stopped_out: bool = False       # stop-loss fired: never re-enter this market
     realized: float = 0.0                       # from sells before resolution
@@ -40,8 +42,9 @@ class Position:
             if f.signal is SignalType.SCALE_ADD:
                 self.adds_used[f.side] += 1
             if f.signal is SignalType.DIRECTIONAL:
-                # the next bet needs confidence to rise from HERE (a filled level)
+                # the next bet needs confidence OR the ask to rise from HERE (a filled level)
                 self.dir_last_fair = self.dir_pending_fair
+                self.dir_last_ask = self.dir_pending_ask
             if f.signal is SignalType.SKEW:
                 self.skew_bought += f.shares
                 self.skew_by_side[f.side] += f.shares

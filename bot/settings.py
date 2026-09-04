@@ -52,7 +52,7 @@ class Settings(BaseSettings):
                                         # both thresholds met = enter, whichever crossed first)
     dir_market_budget_usdc: float = 10  # hard cap on total spend per market
     dir_step_shares: float = 5          # shares per bet
-    dir_conf_step: float = 0.02         # confidence must rise this much for the next bet
+    dir_conf_step: float = 0.02         # confidence OR book ask must rise this much for the next bet
     dir_exit_below: float = 0.45        # sell ALL if the held side's ask AND confidence <= this
     buy_order_type: str = "FOK"         # FOK (all-or-nothing) or FAK (partial fills allowed)
 

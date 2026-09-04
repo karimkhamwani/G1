@@ -95,9 +95,8 @@ class SignalEngine:
     def _directional(self, rt, fair_of: dict, t_rem: float) -> list[OrderIntent]:
         """Two conditions, both required: model confidence on a side >= DIR_CONF_MIN
         AND that side's ask >= DIR_MIN_ENTRY_PRICE (the book backs it too). First bet
-        DIR_STEP_SHARES; further
-        bets only while the threshold still holds and confidence has risen by
-        DIR_CONF_STEP since the last fill. Total spend capped at DIR_MARKET_BUDGET_USDC.
+        DIR_STEP_SHARES; further bets only while both thresholds still hold and EITHER
+        confidence OR the book ask has risen by DIR_CONF_STEP since the last fill. Total spend capped at DIR_MARKET_BUDGET_USDC.
         FOK orders: an unfilled bet dies and is re-placed at the fresh ask after the
         backoff, as long as the threshold still holds. One side per market, held to
         resolution."""
@@ -152,17 +151,22 @@ class SignalEngine:
         rt.confluence_dir = 1 if side is Side.YES else -1
         if self._pending(m.condition_id, side) > 0.5:
             return []   # a bet is working (or backing off after a kill)
-        # after the first fill, the threshold must be HELD and confidence must have
-        # RISEN a little for the next bet
-        if pos.bought[side] > 0 and conf < pos.dir_last_fair + self.s.dir_conf_step:
-            return []
+        # after the first fill, both thresholds must still HOLD (checked above) and
+        # EITHER the model confidence OR the book ask must have RISEN by DIR_CONF_STEP
+        # since the last filled bet
+        if pos.bought[side] > 0:
+            conf_rose = conf >= pos.dir_last_fair + self.s.dir_conf_step
+            ask_rose = top.ask >= pos.dir_last_ask + self.s.dir_conf_step
+            if not (conf_rose or ask_rose):
+                return []
         # budget: real spend (fills) + anything working, hard-capped per market
         pending_notional = self._pending(m.condition_id, side) * top.ask
         remaining = self.s.dir_market_budget_usdc - pos.cost_basis - pending_notional
         shares = float(int(min(self.s.dir_step_shares, remaining // top.ask)))
         if shares < self.s.min_order_shares or shares * top.ask < 1.0:
             return []   # what's left of the budget can't make a valid order
-        pos.dir_pending_fair = conf   # promoted to dir_last_fair when this bet fills
+        pos.dir_pending_fair = conf   # promoted to dir_last_fair/ask when this bet fills
+        pos.dir_pending_ask = top.ask
         return [OrderIntent(
             market_id=m.condition_id, token_id=m.token[side], side=side,
             action=Action.BUY, price=top.ask, shares=shares,

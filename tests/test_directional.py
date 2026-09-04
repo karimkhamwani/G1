@@ -161,3 +161,23 @@ def test_stop_loss_retries_if_sell_dies():
     rt.last_eval_ts = 0
     eng.evaluate(rt)
     assert len([i for i in ex.intents if i.signal is SignalType.STOP_LOSS]) == 2
+
+
+def test_ask_rise_alone_unlocks_next_bet():
+    _, hub, rt, ex, eng, spot = make_dir(100_150, top(0.72, 0.74), top(0.24, 0.26))
+    eng.evaluate(rt)
+    first = dir_fills(ex)[0]
+    hub.on_fill(Fill("c1", Side.YES, Action.BUY, first.price, first.shares, 0.0,
+                     SignalType.DIRECTIONAL, order_id=first.id))
+    assert rt.position.dir_last_ask == 0.74
+    # confidence flat, ask up only 1 tick -> not enough
+    rt.books[Side.YES] = top(0.73, 0.75)
+    rt.last_eval_ts = 0
+    eng.evaluate(rt)
+    assert len(dir_fills(ex)) == 1
+    # confidence still flat, ask up 2 ticks (0.74 -> 0.76) -> next bet
+    rt.books[Side.YES] = top(0.74, 0.76)
+    rt.last_eval_ts = 0
+    eng.evaluate(rt)
+    assert len(dir_fills(ex)) == 2
+    assert dir_fills(ex)[1].price == 0.76
