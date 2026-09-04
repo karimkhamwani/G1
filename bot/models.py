@@ -25,6 +25,7 @@ class SignalType(str, Enum):
     SCALE_ADD = "SCALE_ADD"
     SKEW = "SKEW"
     TAKE_PROFIT = "TAKE_PROFIT"
+    DIRECTIONAL = "DIRECTIONAL"   # one-sided conviction bet (STRATEGY=directional)
 
 
 LAYER_OF = {
@@ -32,6 +33,7 @@ LAYER_OF = {
     SignalType.SCALE_ADD: 1,
     SignalType.SKEW: 2,
     SignalType.TAKE_PROFIT: 2,
+    SignalType.DIRECTIONAL: 2,
 }
 
 

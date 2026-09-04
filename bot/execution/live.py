@@ -185,7 +185,10 @@ class LiveExecutor:
             if is_buy:
                 price = min(1.0 - tick, price + self.s.order_cross_ticks * tick)
             price = round(round(price / tick) * tick, 4)   # snap to the market's grid
-            order_type = OrderType.FAK if is_buy else OrderType.GTC
+            if is_buy:
+                order_type = OrderType.FOK if self.s.buy_order_type == "FOK" else OrderType.FAK
+            else:
+                order_type = OrderType.GTC
             # whole shares: FAK buys require the USDC maker amount (price x size) to
             # have <= 2 decimals — integer size x on-grid price guarantees it
             size = float(int(round(intent.shares))) if is_buy else round(intent.shares, 2)

@@ -116,6 +116,7 @@ class Hub:
                 "t_rem": max(0, round(m.end_ts - now)),
                 "strike": m.strike,
                 "fair_yes": round(rt.fair_yes, 3) if rt.fair_yes is not None else None,
+                "fair_no": round(1.0 - rt.fair_yes, 3) if rt.fair_yes is not None else None,
                 "regime": rt.regime.label if rt.regime else "-",
                 "chop": round(rt.regime.chop_score, 2) if rt.regime else None,
                 "confluence": rt.confluence_dir,

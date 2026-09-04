@@ -17,8 +17,8 @@ class FakeSpot:
     stale = 0.0
 
 
-def make_paper(ask=0.50, ask_size=7.0):
-    s = Settings(_env_file=None, dashboard_port=0, paper_latency_ms=0)
+def make_paper(ask=0.50, ask_size=7.0, order_type="FAK"):
+    s = Settings(_env_file=None, dashboard_port=0, paper_latency_ms=0, buy_order_type=order_type)
     hub = Hub()
     now = time.time()
     m = Market(condition_id="c1", slug="t", question="t?", asset="BTC", duration_s=300,
@@ -74,3 +74,21 @@ def test_fak_no_fill_rearms_tp_level():
     ex.submit(intent)
     ex._activate(time.time() + 1)   # no bid: sell dies -> level re-armed
     assert 0.90 not in rt.position.tp_taken
+
+
+def test_fok_is_all_or_nothing():
+    # visible 7 < 10 wanted: FOK fills NOTHING (FAK would take the 7)
+    s, hub, rt, ex = make_paper(ask=0.50, ask_size=7.0, order_type="FOK")
+    intent = OrderIntent(market_id="c1", token_id="ty", side=Side.YES, action=Action.BUY,
+                         price=0.50, shares=10.0, signal=SignalType.DIRECTIONAL)
+    ex.submit(intent)
+    ex._activate(time.time() + 1)
+    assert rt.position.shares[Side.YES] == 0.0
+    assert ex.open_shares("c1", Side.YES) == 0.0          # killed, nothing resting
+    # enough visible size: fills the whole order
+    s2, hub2, rt2, ex2 = make_paper(ask=0.50, ask_size=12.0, order_type="FOK")
+    intent2 = OrderIntent(market_id="c1", token_id="ty", side=Side.YES, action=Action.BUY,
+                          price=0.50, shares=10.0, signal=SignalType.DIRECTIONAL)
+    ex2.submit(intent2)
+    ex2._activate(time.time() + 1)
+    assert abs(rt2.position.shares[Side.YES] - 10.0) < 1e-9

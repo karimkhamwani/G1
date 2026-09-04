@@ -146,6 +146,16 @@ with all state journaled to disk.
 - All feeds auto-reconnect with backoff and publish heartbeats the RiskManager watches.
 
 ### 3.3 `signal/` — Signal Engine
+- **`STRATEGY=directional` (default)** — one-sided conviction bets. Two conditions,
+  both required: the model's confidence on a side ≥ `DIR_CONF_MIN` (0.75) AND that
+  side's ask ≥ `DIR_MIN_ENTRY_PRICE` (0.70 — the book agrees). First bet
+  `DIR_STEP_SHARES` (5); further bets only while the threshold still holds AND
+  confidence has risen by `DIR_CONF_STEP` since the last fill; total spend hard-capped
+  at `DIR_MARKET_BUDGET_USDC` (10). FOK orders: an unfilled bet dies and is re-placed
+  at the fresh ask after a 1s backoff while the threshold holds. One side per market,
+  held to resolution. Safety: never pays an ask at/above the model's own fair value
+  (`DIR_REQUIRE_EDGE`).
+- **`STRATEGY=paired`** — the original two-layer design below.
 - On every spot tick or book update for an active market, emit up to three signal types:
   1. **`BaseEntrySignal`** — early in the cycle (within `entry_window_s` of open, spread
      sane): buy `base_shares` of each side. No combined-cost gate — the goal is to be

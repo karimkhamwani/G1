@@ -142,7 +142,9 @@ function cards(s){
       <div class="bar"><i style="width:${frac*100}%"></i></div>
       ${m.skipped?`<div class="dim">skipped: ${m.skipped}</div>`:`
       <table>
-        <tr><td>fair YES</td><td>${fmt(m.fair_yes,3)}</td><td>strike</td><td>${m.strike?(+m.strike).toLocaleString():'–'}</td></tr>
+        <tr><td>fair YES</td><td class="${m.fair_yes==null?'dim':m.fair_yes>=0.75?'pos':''}">${fmt(m.fair_yes,3)}</td>
+            <td>fair NO</td><td class="${m.fair_no==null?'dim':m.fair_no>=0.75?'pos':''}">${fmt(m.fair_no,3)}</td></tr>
+        <tr><td>strike</td><td colspan="3">${m.strike?(+m.strike).toLocaleString():'–'}</td></tr>
         <tr><td>YES</td><td>${fmt(m.books.YES.bid,2)}/${fmt(m.books.YES.ask,2)}</td>
             <td>NO</td><td>${fmt(m.books.NO.bid,2)}/${fmt(m.books.NO.ask,2)}</td></tr>
         <tr><td>pos Y</td><td>${p.yes_shares} @ ${fmt(p.yes_avg,3)}</td>

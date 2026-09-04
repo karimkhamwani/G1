@@ -126,11 +126,14 @@ class SimExecutor:
                         self._fill(r, top.bid, cap=top.bid_size)
                     self._drop(r)   # sells don't rest (same as paper mode)
                     continue
-                # BUY: FAK semantics, same as paper/live — fill what's visible at the
-                # cross-buffered limit, then kill the remainder (no resting buys)
+                # BUY: FOK/FAK semantics, same as paper/live (no resting buys)
                 limit = min(0.99, i.price + self.s.order_cross_ticks * 0.01)
                 if top.ask is not None and top.ask <= limit:
-                    self._fill(r, top.ask, cap=top.ask_size)
+                    if self.s.buy_order_type == "FOK":
+                        if top.ask_size >= i.shares:
+                            self._fill(r, top.ask)
+                    else:
+                        self._fill(r, top.ask, cap=top.ask_size)
                 self._drop(r)
                 continue
             if now - r["placed"] > self.s.order_ttl_s:

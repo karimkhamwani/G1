@@ -104,19 +104,24 @@ class PaperExecutor:
                 if order.filled_shares <= 0:
                     self._cancel(order, "no bid to sell into")
                 continue
-            # BUY: FAK semantics, mirroring live — fill what the book shows at the
-            # cross-buffered limit, then kill the remainder (no resting buys)
+            # BUY: FOK/FAK semantics, mirroring live. FOK fills the whole size or
+            # nothing; FAK fills what the book shows and kills the rest. No resting buys.
+            otype = self.s.buy_order_type
             limit = min(0.99, intent.price + self.s.order_cross_ticks * 0.01)
             if top.ask is not None and top.ask <= limit:
-                shares = min(intent.shares, top.ask_size)       # no fill floor
-                self._fill(order, top.ask, shares, taker=True)
+                if otype == "FOK":
+                    if top.ask_size >= intent.shares:
+                        self._fill(order, top.ask, intent.shares, taker=True)
+                else:
+                    shares = min(intent.shares, top.ask_size)       # no fill floor
+                    self._fill(order, top.ask, shares, taker=True)
             if order.remaining > 0.5:
-                self._cancel(order, "fak remainder killed" if order.filled_shares > 0
-                             else "fak no fill")
+                self._cancel(order, f"{otype.lower()} remainder killed" if order.filled_shares > 0
+                             else f"{otype.lower()} no fill")
             self.recorder.log("order", {"id": intent.id, "market_id": intent.market_id,
                                         "side": intent.side.value, "action": intent.action.value,
                                         "price": intent.price, "shares": intent.shares,
-                                        "signal": intent.signal.value, "order_type": "FAK",
+                                        "signal": intent.signal.value, "order_type": otype,
                                         "status": order.status.value})
 
     def _sweep(self, now: float) -> None:

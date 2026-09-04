@@ -22,6 +22,8 @@ class Position:
     base_retried: dict[Side, bool] = field(default_factory=lambda: {Side.YES: False, Side.NO: False})
     base_price: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
     blocked_until: dict[Side, float] = field(default_factory=lambda: {Side.YES: 0.0, Side.NO: 0.0})
+    dir_last_fair: float = 0.0      # model confidence at the last FILLED directional bet
+    dir_pending_fair: float = 0.0   # confidence at the last SUBMITTED bet (promoted on fill)
     realized: float = 0.0                       # from sells before resolution
     fees_paid: float = 0.0
     fills: list[Fill] = field(default_factory=list)
@@ -35,6 +37,9 @@ class Position:
             self.fill_count[f.side] += 1
             if f.signal is SignalType.SCALE_ADD:
                 self.adds_used[f.side] += 1
+            if f.signal is SignalType.DIRECTIONAL:
+                # the next bet needs confidence to rise from HERE (a filled level)
+                self.dir_last_fair = self.dir_pending_fair
             if f.signal is SignalType.SKEW:
                 self.skew_bought += f.shares
                 self.skew_by_side[f.side] += f.shares
@@ -50,7 +55,8 @@ class Position:
         self.fees_paid += f.fee
         self.fills.append(f)
 
-    RETRY_BACKOFF_S = 3.0   # after a zero-fill order, hold that side's triggers briefly
+    RETRY_BACKOFF_S = 1.0   # after a zero-fill order, hold that side's triggers briefly
+                            # (FOK/FAK die instantly; 1s = "cancel and replace" pacing)
 
     def order_closed(self, intent, filled_shares: float, now: float | None = None) -> None:
         """An order died at the executor (cancel/TTL/reject/drop). Re-arm one-shot

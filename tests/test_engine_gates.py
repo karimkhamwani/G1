@@ -52,7 +52,7 @@ class NullRecorder:
 
 
 def make_env(spot_prices, spot_now, book_yes, book_no, position_fills=(), drift=0.0):
-    s = Settings(_env_file=None, dashboard_port=0)
+    s = Settings(_env_file=None, dashboard_port=0, strategy="paired")
     hub = Hub()
     now = time.time()
     m = Market(condition_id="c1", slug="test", question="test?", asset="BTC",
@@ -180,7 +180,7 @@ class PendingAwareExecutor(CollectingExecutor):
 
 def make_env_exec(spot_prices, spot_now, book_yes, book_no, position_fills=(),
                   drift=0.0, executor=None, start_offset=120):
-    s = Settings(_env_file=None, dashboard_port=0)
+    s = Settings(_env_file=None, dashboard_port=0, strategy="paired")
     hub = Hub()
     now = time.time()
     m = Market(condition_id="c1", slug="test", question="test?", asset="BTC",

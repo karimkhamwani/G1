@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     max_shares_per_side: float = 60
 
     # skew (layer 2)
+    # strategy: "directional" (one-sided conviction bets) or "paired" (base + pair ladder + skew)
+    strategy: str = "directional"
+    dir_conf_min: float = 0.75          # model confidence required on a side
+    dir_min_entry_price: float = 0.70   # ... AND that side's ask must be at or ABOVE this
+                                        # (the book agrees with the model)
+    dir_require_edge: bool = True       # safety: never pay an ask at/above the model's fair value
+    dir_market_budget_usdc: float = 10  # hard cap on total spend per market
+    dir_step_shares: float = 5          # shares per bet
+    dir_conf_step: float = 0.02         # confidence must rise this much for the next bet
+    buy_order_type: str = "FOK"         # FOK (all-or-nothing) or FAK (partial fills allowed)
+
     skew_enabled: bool = True           # False = layer 2 never opens a position
     skew_window_s: int = 60             # skew fires only in the last N seconds of the window
     skew_min_fair: float = 0.75         # model conviction floor for the favored side
@@ -99,6 +110,22 @@ class Settings(BaseSettings):
         v = v.strip().lower()
         if v not in ("paper", "live"):
             raise ValueError("MODE must be 'paper' or 'live'")
+        return v
+
+    @field_validator("strategy")
+    @classmethod
+    def _strategy_ok(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("directional", "paired"):
+            raise ValueError("STRATEGY must be 'directional' or 'paired'")
+        return v
+
+    @field_validator("buy_order_type")
+    @classmethod
+    def _order_type_ok(cls, v: str) -> str:
+        v = v.strip().upper()
+        if v not in ("FOK", "FAK"):
+            raise ValueError("BUY_ORDER_TYPE must be 'FOK' or 'FAK'")
         return v
 
     # ---- parsed views -------------------------------------------------

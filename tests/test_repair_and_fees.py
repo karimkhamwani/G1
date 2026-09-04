@@ -10,7 +10,7 @@ from tests.test_engine_gates import (CollectingExecutor, FakeSpot, NullRecorder,
 
 
 def _env(quoted, now_ask):
-    s = Settings(_env_file=None, dashboard_port=0)
+    s = Settings(_env_file=None, dashboard_port=0, strategy="paired")
     hub = Hub()
     now = time.time()
     m = Market(condition_id="c1", slug="t", question="t?", asset="BTC", duration_s=300,
@@ -66,7 +66,7 @@ def test_skew_disabled_never_opens_layer_2():
     rt.regime = classify([100_000, 100_100, 99_900, 100_080] * 10, 100_000.0, 2.0)
     assert rt.regime.known                      # regime is fine; only the switch is off
     hub = Hub(); hub.markets[m.condition_id] = rt
-    eng = SignalEngine(Settings(_env_file=None, dashboard_port=0, skew_enabled=False), hub,
+    eng = SignalEngine(Settings(_env_file=None, dashboard_port=0, strategy="paired", skew_enabled=False), hub,
                        {"BTC": FakeSpot(100_000.0, [100_000])}, PermissiveRisk(),
                        CollectingExecutor(), NullRecorder())
     assert eng._skew(rt, {Side.YES: 0.05, Side.NO: 0.95}, 240) == []

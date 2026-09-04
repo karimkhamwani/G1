@@ -81,12 +81,74 @@ class SignalEngine:
         rt.regime = regime
 
         intents: list[OrderIntent] = []
-        intents += self._base_entry(rt, now)
-        intents += self._scale_adds(rt, now)
-        intents += self._skew(rt, fair_of, t_rem)
+        if self.s.strategy == "directional":
+            intents += self._directional(rt, fair_of, t_rem)
+        else:
+            intents += self._base_entry(rt, now)
+            intents += self._scale_adds(rt, now)
+            intents += self._skew(rt, fair_of, t_rem)
         intents += self._take_profit(rt)
 
         return self._submit(rt, intents, fair, regime, sigma, drift, spot.price, t_rem)
+
+    # ---- directional strategy: one-sided conviction bets --------------------------
+    def _directional(self, rt, fair_of: dict, t_rem: float) -> list[OrderIntent]:
+        """Two conditions, both required: model confidence on a side >= DIR_CONF_MIN
+        AND that side's ask >= DIR_MIN_ENTRY_PRICE (the book backs it too). First bet
+        DIR_STEP_SHARES; further
+        bets only while the threshold still holds and confidence has risen by
+        DIR_CONF_STEP since the last fill. Total spend capped at DIR_MARKET_BUDGET_USDC.
+        FOK orders: an unfilled bet dies and is re-placed at the fresh ask after the
+        backoff, as long as the threshold still holds. One side per market, held to
+        resolution."""
+        m, pos = rt.market, rt.position
+        if t_rem < self.s.final_blackout_s:
+            rt.confluence_dir = 0
+            return []
+        # condition 1: which side (if any) does the model back with >= DIR_CONF_MIN
+        if fair_of[Side.YES] >= self.s.dir_conf_min:
+            side = Side.YES
+        elif fair_of[Side.NO] >= self.s.dir_conf_min:
+            side = Side.NO
+        else:
+            rt.confluence_dir = 0
+            return []
+        # never build the opposite side too (that would be a pair, not a bet)
+        if pos.shares[side.other] > 0:
+            rt.confluence_dir = 0
+            return []
+        top = rt.books[side]
+        conf = fair_of[side]
+        # condition 2: the book must agree — its price for the side is at/above the floor
+        if top.ask is None or top.ask < self.s.dir_min_entry_price:
+            rt.confluence_dir = 0
+            return []
+        # safety: paying more than the model thinks it's worth is negative expectancy
+        if self.s.dir_require_edge and top.ask >= conf:
+            rt.confluence_dir = 0
+            return []
+        rt.confluence_dir = 1 if side is Side.YES else -1
+        if self._pending(m.condition_id, side) > 0.5:
+            return []   # a bet is working (or backing off after a kill)
+        # after the first fill, the threshold must be HELD and confidence must have
+        # RISEN a little for the next bet
+        if pos.bought[side] > 0 and conf < pos.dir_last_fair + self.s.dir_conf_step:
+            return []
+        # budget: real spend (fills) + anything working, hard-capped per market
+        pending_notional = self._pending(m.condition_id, side) * top.ask
+        remaining = self.s.dir_market_budget_usdc - pos.cost_basis - pending_notional
+        shares = float(int(min(self.s.dir_step_shares, remaining // top.ask)))
+        if shares < self.s.min_order_shares or shares * top.ask < 1.0:
+            return []   # what's left of the budget can't make a valid order
+        pos.dir_pending_fair = conf   # promoted to dir_last_fair when this bet fills
+        return [OrderIntent(
+            market_id=m.condition_id, token_id=m.token[side], side=side,
+            action=Action.BUY, price=top.ask, shares=shares,
+            signal=SignalType.DIRECTIONAL,
+            reason=f"conf {conf:.2f} >= {self.s.dir_conf_min:.2f}, ask {top.ask:.2f} >= "
+                   f"{self.s.dir_min_entry_price:.2f}, spent {pos.cost_basis:.2f}/"
+                   f"{self.s.dir_market_budget_usdc:.0f}",
+        )]
 
     def _submit(self, rt, intents, fair, regime, sigma=0.0, drift=0.0,
                 spot_price=None, t_rem=0.0) -> list[OrderIntent]:
