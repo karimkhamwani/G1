@@ -208,3 +208,35 @@ def test_official_winner_parsing():
     assert official_winner(not_yet) is None
     assert official_winner(still_open) is None
     assert official_winner({}) is None
+
+
+def test_stopped_out_market_still_settles_realized_pnl():
+    """A stop-loss that empties the position must book its realized loss and appear
+    in resolved history — it used to vanish silently."""
+    import asyncio
+    from bot.lifecycle import Lifecycle
+    from bot.state import Hub, MarketRuntime
+
+    class _Exec:
+        def cancel_market(self, *a, **k): return 0
+    class _Rec:
+        def log(self, *a, **k): pass
+
+    s = Settings(_env_file=None, dashboard_port=0, strategy="directional")
+    hub = Hub()
+    now = time.time()
+    m = Market(condition_id="c1", slug="t", question="t?", asset="BTC", duration_s=300,
+               start_ts=now - 310, end_ts=now - 10,   # window just ended
+               token={Side.YES: "ty", Side.NO: "tn"}, strike=100_000.0)
+    rt = MarketRuntime(market=m)
+    rt.position.apply_fill(Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL))
+    rt.position.apply_fill(Fill("c1", Side.YES, Action.SELL, 0.34, 5, 0.0, SignalType.STOP_LOSS))
+    assert rt.position.total_shares == 0 and abs(rt.position.realized - (-2.0)) < 1e-9
+    hub.markets["c1"] = rt
+    lc = Lifecycle(s, hub, {}, _Exec(), _Rec(), None)
+    asyncio.run(lc._resolve(rt, now))
+    assert len(hub.history) == 1
+    rec = hub.history[0]
+    assert rec["settlement"] == "closed_out" and rec["winner"] == "EXITED"
+    assert abs(rec["pnl"] - (-2.0)) < 1e-9
+    assert abs(hub.session_pnl - (-2.0)) < 1e-9      # loss actually booked

@@ -110,6 +110,13 @@ class Lifecycle:
             self.executor.cancel_market(m.condition_id, "window closed")
             if m.strike is None or rt.position.total_shares == 0:
                 rt.resolved = True
+                if rt.position.fills:
+                    # traded but fully exited before the close (stop-loss / take-profit):
+                    # the realized P&L must still be booked and the cycle recorded —
+                    # with zero shares left the outcome doesn't change the number
+                    spot = self.spots.get(m.asset)
+                    close = spot.price if spot and spot.stale < 10 else None
+                    self._settle(rt, now, None, close, "closed_out")
                 self.hub.markets.pop(m.condition_id, None)
                 return
             spot = self.spots.get(m.asset)
@@ -137,17 +144,21 @@ class Lifecycle:
                 winner = min(Side, key=lambda s: rt.position.shares[s])
                 self._settle(rt, now, winner, None, "no_price_worst_case")
 
-    def _settle(self, rt, now: float, winner: Side, close, settlement: str) -> None:
+    def _settle(self, rt, now: float, winner: Side | None, close, settlement: str) -> None:
+        """winner=None means the position was fully exited before resolution — with
+        zero remaining shares the P&L is purely the realized amount and does not
+        depend on the outcome (any Side gives the same numbers)."""
         m = rt.market
-        pnl = rt.position.resolution_pnl(winner)
-        layers = rt.position.layer_pnl(winner)
+        w = winner if winner is not None else Side.NO
+        pnl = rt.position.resolution_pnl(w)
+        layers = rt.position.layer_pnl(w)
         rt.winner, rt.resolution_pnl, rt.layer_pnl = winner, pnl, layers
         self.hub.book_pnl(pnl)
         record = {
             "ts": round(now, 3),
             "market_id": m.condition_id, "slug": m.slug, "question": m.question,
             "asset": m.asset, "duration_s": m.duration_s, "mode": self.s.mode,
-            "winner": winner.value, "close": close, "strike": m.strike,
+            "winner": winner.value if winner else "EXITED", "close": close, "strike": m.strike,
             "pnl": round(pnl, 4),
             "l1": round(layers[1], 4), "l2": round(layers[2], 4),
             "combined_avg": round(rt.position.combined_avg, 4) if rt.position.combined_avg else None,
@@ -166,7 +177,8 @@ class Lifecycle:
         }
         self.hub.history.append(record)
         self.recorder.log("resolved", {k: v for k, v in record.items() if k != "ts"})
-        self.hub.note(f"resolved {m.asset} {m.duration_s // 60}m -> {winner.value} "
+        outcome = winner.value if winner else "closed out early"
+        self.hub.note(f"resolved {m.asset} {m.duration_s // 60}m -> {outcome} "
                       f"pnl {pnl:+.2f} (L1 {layers[1]:+.2f} / L2 {layers[2]:+.2f})")
         if self.s.mode == "live":
             self.hub.note("live mode: redeem winnings in the Polymarket UI (auto-redeem TODO)")
