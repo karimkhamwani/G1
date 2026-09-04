@@ -116,8 +116,8 @@ def test_never_bets_against_an_existing_position():
     assert dir_fills(ex) == []
 
 
-def test_stop_loss_sells_all_when_book_and_model_collapse():
-    # we hold 5 YES @0.74; spot fell below strike -> fair_yes ~0.13; YES ask 0.40 <= 0.45
+def test_stop_loss_sells_all_when_book_ask_collapses():
+    # we hold 5 YES @0.74; YES ask 0.40 <= 0.45 -> get out, whatever the model thinks
     fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
     _, _, rt, ex, eng, _ = make_dir(99_850, top(0.38, 0.40), top(0.58, 0.60), fills)
     eng.evaluate(rt)
@@ -138,16 +138,38 @@ def test_stop_loss_sells_all_when_book_and_model_collapse():
     assert dir_fills(ex) == []
 
 
-def test_stop_loss_needs_both_book_and_model_below():
+def test_stop_loss_ignores_the_model_entirely():
+    """The exit is a book-only rule: the ask decides, the fair value is irrelevant.
+
+    Requiring the model to agree is what let losers ride to zero — a late reversal
+    kept fair value high while the book had already marked the position down.
+    """
     fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
-    # book collapsed (ask 0.40) but the model still likes it (spot up -> fair ~0.87): hold
+    # book collapsed (ask 0.40) while the model still loves it (spot up -> fair ~0.87):
+    # SELL anyway — this is the case that used to hold and expire worthless
     _, _, rt, ex, eng, _ = make_dir(100_150, top(0.38, 0.40), top(0.58, 0.60), fills)
     eng.evaluate(rt)
-    assert not [i for i in ex.intents if i.signal is SignalType.STOP_LOSS]
-    # model collapsed (fair ~0.13) but the book still prices YES at 0.60: hold
+    stops = [i for i in ex.intents if i.signal is SignalType.STOP_LOSS]
+    assert rt.fair_yes > 0.75                      # model is still bullish...
+    assert len(stops) == 1 and stops[0].shares == 5.0 and stops[0].price == 0.38
+    # model collapsed (fair ~0.13) but the book still bids YES at 0.58: HOLD, because
+    # the only thing that matters is that we can still sell above the exit level
     _, _, rt2, ex2, eng2, _ = make_dir(99_850, top(0.58, 0.60), top(0.38, 0.40), fills)
     eng2.evaluate(rt2)
+    assert rt2.fair_yes < 0.45                     # model is bearish...
     assert not [i for i in ex2.intents if i.signal is SignalType.STOP_LOSS]
+
+
+def test_stop_loss_runs_without_a_volatility_estimate():
+    """A feed gap kills the model but must not strand an open position: entries stop,
+    the book-only exit keeps working."""
+    fills = [Fill("c1", Side.YES, Action.BUY, 0.74, 5, 0.0, SignalType.DIRECTIONAL)]
+    _, _, rt, ex, eng, spot = make_dir(99_850, top(0.38, 0.40), top(0.58, 0.60), fills)
+    spot._sigma = 0.0                              # no trustworthy vol estimate
+    eng.evaluate(rt)
+    assert rt.fair_yes is None                     # model refused to produce a value
+    stops = [i for i in ex.intents if i.signal is SignalType.STOP_LOSS]
+    assert len(stops) == 1 and stops[0].shares == 5.0
 
 
 def test_stop_loss_retries_if_sell_dies():

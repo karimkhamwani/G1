@@ -62,15 +62,16 @@ class SignalEngine:
         if sigma <= 0.0:
             # No trustworthy volatility estimate. fair_yes would divide by the MIN_SIGMA
             # floor and saturate to ~0/~1, turning sub-basis-point noise into false
-            # conviction — which is exactly how the skew layer lost money. Take-profit
-            # still runs below: it reduces risk and does not depend on the model.
+            # conviction — which is exactly how the skew layer lost money. Entries stop,
+            # but the RISK-REDUCING signals still run: both the stop-loss and take-profit
+            # read the book only, so a feed gap must not strand an open position.
             rt.fair_yes = None
             rt.confluence_dir = 0
             if not self._vol_warned.get(m.asset):
                 self._vol_warned[m.asset] = True
                 self.hub.note(f"{m.asset}: no usable volatility estimate "
                               f"(feed gaps) - entries paused")
-            return self._submit(rt, self._take_profit(rt), None, None)
+            return self._submit(rt, self._stop_loss(rt) + self._take_profit(rt), None, None)
         self._vol_warned[m.asset] = False
         fair = fair_yes(spot.price, m.strike, sigma, drift, t_rem)
         rt.fair_yes = fair
@@ -91,6 +92,42 @@ class SignalEngine:
 
         return self._submit(rt, intents, fair, regime, sigma, drift, spot.price, t_rem)
 
+    # ---- directional stop-loss: book-only ------------------------------------------
+    def _stop_loss(self, rt) -> list[OrderIntent]:
+        """Sell the whole held side once its ASK falls to DIR_EXIT_BELOW.
+
+        The book alone decides. The model used to be a second required condition, and
+        that pairing is what let losers ride to zero: an exit needed the ask AND the
+        fair value to collapse together, so a late reversal (or a lagging model) kept
+        the position open until the window closed and the shares expired worthless.
+        The book is the price we can actually sell at, so it is the only input that
+        belongs in an exit decision.
+
+        Being model-free also means this runs when there is NO volatility estimate —
+        `evaluate` skips the rest of the strategy in that case, but an open position
+        still needs its exit.
+        """
+        if self.s.strategy != "directional":
+            return []   # the paired strategy exits via take-profit, not a stop
+        m, pos = rt.market, rt.position
+        held = pos.skew_side   # the side we hold (directional positions are one-sided)
+        if held is None or pos.shares[held] <= 0 or pos.exit_pending:
+            return []
+        top = rt.books[held]
+        if top.ask is None or top.ask > self.s.dir_exit_below:
+            return []
+        if top.bid is None:
+            return []   # nothing to sell into right now; retry next eval
+        pos.exit_pending = True
+        shares = round(pos.shares[held], 2)
+        return [OrderIntent(
+            market_id=m.condition_id, token_id=m.token[held], side=held,
+            action=Action.SELL, price=top.bid, shares=shares,
+            signal=SignalType.STOP_LOSS,
+            reason=f"stop-loss: ask {top.ask:.2f} <= {self.s.dir_exit_below:.2f}, "
+                   f"selling all {shares:g} at bid {top.bid:.2f}",
+        )]
+
     # ---- directional strategy: one-sided conviction bets --------------------------
     def _directional(self, rt, fair_of: dict, t_rem: float, now: float) -> list[OrderIntent]:
         """Two conditions, both required: model confidence on a side >= DIR_CONF_MIN
@@ -101,24 +138,10 @@ class SignalEngine:
         backoff, as long as the threshold still holds. One side per market, held to
         resolution."""
         m, pos = rt.market, rt.position
-        # STOP-LOSS first: if we hold a side and BOTH the book and the model have
-        # collapsed on it (ask and confidence <= DIR_EXIT_BELOW), sell everything
-        held = pos.skew_side   # the side we hold (directional positions are one-sided)
-        if held is not None and pos.shares[held] > 0 and not pos.exit_pending:
-            top_h = rt.books[held]
-            if (top_h.ask is not None and top_h.ask <= self.s.dir_exit_below
-                    and fair_of[held] <= self.s.dir_exit_below):
-                if top_h.bid is None:
-                    return []   # nothing to sell into right now; retry next eval
-                pos.exit_pending = True
-                shares = round(pos.shares[held], 2)
-                return [OrderIntent(
-                    market_id=m.condition_id, token_id=m.token[held], side=held,
-                    action=Action.SELL, price=top_h.bid, shares=shares,
-                    signal=SignalType.STOP_LOSS,
-                    reason=f"stop-loss: ask {top_h.ask:.2f} and conf {fair_of[held]:.2f} "
-                           f"<= {self.s.dir_exit_below:.2f}, selling all {shares:g}",
-                )]
+        # STOP-LOSS first, and it wins the eval: nothing else matters once we're out
+        stop = self._stop_loss(rt)
+        if stop:
+            return stop
         if pos.stopped_out or pos.exit_pending:
             rt.confluence_dir = 0
             return []   # bailed out of this market: never re-enter it

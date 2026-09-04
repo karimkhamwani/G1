@@ -26,7 +26,7 @@ class SignalType(str, Enum):
     SKEW = "SKEW"
     TAKE_PROFIT = "TAKE_PROFIT"
     DIRECTIONAL = "DIRECTIONAL"   # one-sided conviction bet (STRATEGY=directional)
-    STOP_LOSS = "STOP_LOSS"       # directional exit: sell all when book AND model collapse
+    STOP_LOSS = "STOP_LOSS"       # directional exit: sell all when the book ask collapses
 
 
 LAYER_OF = {

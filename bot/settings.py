@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     dir_market_budget_usdc: float = 10  # hard cap on total spend per market
     dir_step_shares: float = 5          # shares per bet
     dir_conf_step: float = 0.02         # confidence OR book ask must rise this much for the next bet
-    dir_exit_below: float = 0.45        # sell ALL if the held side's ask AND confidence <= this
+    dir_exit_below: float = 0.45        # sell ALL when the held side's book ASK falls to this
+                                        # (book only - the model is not consulted on exits)
     dir_no_trade_first_s: int = 30      # no directional bets in the first N seconds of a window
     buy_order_type: str = "FOK"         # FOK (all-or-nothing) or FAK (partial fills allowed)
 
