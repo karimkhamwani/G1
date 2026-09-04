@@ -82,7 +82,7 @@ class SignalEngine:
 
         intents: list[OrderIntent] = []
         intents += self._base_entry(rt, now)
-        intents += self._scale_adds(rt, fair_of, regime, now)
+        intents += self._scale_adds(rt, now)
         intents += self._skew(rt, fair_of, t_rem)
         intents += self._take_profit(rt)
 
@@ -194,51 +194,52 @@ class SignalEngine:
         return intents
 
     # ---- layer 1: ladder adds (model gate + regime gate) ---------------------
-    def _scale_adds(self, rt, fair_of: dict, regime, now: float) -> list[OrderIntent]:
+    def _scale_adds(self, rt, now: float) -> list[OrderIntent]:
+        """Layer 1 ladder: add MATCHED PAIRS — both sides at once, equal shares.
+
+        A matched pair pays exactly $1 at resolution no matter which way BTC goes, so
+        a pair bought for less than $1 is locked profit and needs no directional model
+        or regime call. Trigger: the combined ask is below PAIR_ADD_MAX, or below our
+        own combined average by ADD_TRIGGER_DROP (improving the average)."""
         m, pos = rt.market, rt.position
-        if not pos.base_placed or regime.trending:
+        if not pos.base_placed:
             return []
         # window-age gate: no adds until the window has shown some character
         if now - m.start_ts < self.s.min_window_age_s:
             return []
-        # divergence clamp: when the model and the book disagree wildly, the model is
-        # the one that's probably wrong — do not "buy the edge"
-        yes_mid = rt.books[Side.YES].mid
-        if yes_mid is not None and abs(fair_of[Side.YES] - yes_mid) > self.s.model_book_divergence_max:
+        yes, no = rt.books[Side.YES], rt.books[Side.NO]
+        if yes.ask is None or no.ask is None:
+            return []
+        pair_ask = yes.ask + no.ask
+        cavg = pos.combined_avg
+        cheap_vs_avg = cavg is not None and pair_ask <= cavg - self.s.add_trigger_drop
+        if not (pair_ask <= self.s.pair_add_max or cheap_vs_avg):
             return []
         max_adds, decay = self.s.ladder(m.duration_s)
-        intents = []
-        for side in Side:
-            top, avg = rt.books[side], pos.avg(side)
-            if top.ask is None or avg is None:
-                continue
-            if pos.adds_used[side] >= max_adds:
-                continue
-            if self._pending(m.condition_id, side) > 0.5:
-                continue   # an order for this side is already working
-            # trigger: ask meaningfully below our own average
-            if top.ask > avg - self.s.add_trigger_drop:
-                continue
-            # model gate: the ask must also be below fair value (no extra margin —
-            # fees and edge headroom are the trader's concern, not modeled here)
-            if top.ask >= fair_of[side]:
-                continue
-            step = self.s.add_step_shares * (decay ** pos.adds_used[side])
-            step *= 1.0 + self.rng.uniform(-self.s.add_jitter_pct, self.s.add_jitter_pct)
-            # WHOLE shares: FAK buys require the USDC maker amount (price x size) to
-            # have <= 2 decimals; integer size x 2-decimal price guarantees that
-            shares = float(max(self.s.min_order_shares, round(step)))
-            if pos.shares[side] + shares > self.s.max_shares_per_side:
-                continue
-            price = round(top.ask * (1.0 + self.rng.uniform(0, 0.01)), 3)  # tiny price jitter
-            intents.append(OrderIntent(
-                market_id=m.condition_id, token_id=m.token[side], side=side,
-                action=Action.BUY, price=min(price, 0.99), shares=shares,
-                signal=SignalType.SCALE_ADD,
-                reason=f"avg {avg:.3f} -> ask {top.ask:.3f}, fair {fair_of[side]:.3f}, "
-                       f"chop {regime.chop_score:.1f}",
-            ))
-        return intents
+        adds_done = max(pos.adds_used[Side.YES], pos.adds_used[Side.NO])
+        if adds_done >= max_adds:
+            return []
+        # both legs must be clear: a working order on either side blocks the pair
+        if (self._pending(m.condition_id, Side.YES) > 0.5
+                or self._pending(m.condition_id, Side.NO) > 0.5):
+            return []
+        step = self.s.add_step_shares * (decay ** adds_done)
+        step *= 1.0 + self.rng.uniform(-self.s.add_jitter_pct, self.s.add_jitter_pct)
+        # WHOLE shares (FAK precision rule), and sized so the CHEAPER leg clears the
+        # $1 minimum notional — otherwise _submit would bump one leg and unbalance
+        # the pair
+        min_for_notional = math.ceil(1.02 / max(min(yes.ask, no.ask), 0.01))
+        shares = float(max(self.s.min_order_shares, min_for_notional, round(step)))
+        if (pos.shares[Side.YES] + shares > self.s.max_shares_per_side
+                or pos.shares[Side.NO] + shares > self.s.max_shares_per_side):
+            return []
+        reason = f"pair add: sum {pair_ask:.3f}" + (f", c.avg {cavg:.3f}" if cavg else "")
+        return [
+            OrderIntent(market_id=m.condition_id, token_id=m.token[side], side=side,
+                        action=Action.BUY, price=min(top.ask, 0.99), shares=shares,
+                        signal=SignalType.SCALE_ADD, reason=reason)
+            for side, top in ((Side.YES, yes), (Side.NO, no))
+        ]
 
     # ---- layer 2: momentum skew ------------------------------------------------
     def _skew(self, rt, fair_of: dict, t_rem: float) -> list[OrderIntent]:
@@ -252,8 +253,12 @@ class SignalEngine:
         if rt.regime is None or not rt.regime.known:
             rt.confluence_dir = 0
             return []
-        if t_rem < self.s.final_blackout_s or pos.skew_bought >= self.s.max_skew_shares:
-            rt.confluence_dir = 0 if t_rem < self.s.final_blackout_s else rt.confluence_dir
+        # LATE-WINDOW ONLY: the skew is a conviction trade near resolution, when the
+        # move is largely decided — not an all-window momentum chase
+        if not (self.s.final_blackout_s <= t_rem <= self.s.skew_window_s):
+            rt.confluence_dir = 0
+            return []
+        if pos.skew_bought >= self.s.max_skew_shares:
             return []
         yes_top = rt.books[Side.YES]
         mid = yes_top.mid
@@ -276,6 +281,11 @@ class SignalEngine:
             return []
         rt.confluence_dir = model_dir
         side = Side.YES if model_dir > 0 else Side.NO
+        # conviction floor: this close to resolution the model saturates when spot is
+        # clearly away from the strike — anything less is noise, not confidence
+        if fair_of[side] < self.s.skew_min_fair:
+            rt.confluence_dir = 0
+            return []
         top = rt.books[side]
         if top.ask is None:
             return []

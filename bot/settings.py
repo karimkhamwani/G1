@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     chop_score_min: float = 2.0
     min_net_move_frac: float = 0.0008   # regime: net move below this = "no character yet"
     min_window_age_s: int = 20          # no ladder adds before the window is this old
-    model_book_divergence_max: float = 0.15  # |fair - mid| beyond this: distrust the MODEL, skip adds
+    pair_add_max: float = 0.98          # add a matched pair when ask_yes + ask_no <= this
     max_adds_per_side_5m: int = 3
     step_decay_5m: float = 0.7
     max_adds_per_side_15m: int = 6
@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     # skew (layer 2)
     skew_enabled: bool = True           # False = layer 2 never opens a position
+    skew_window_s: int = 60             # skew fires only in the last N seconds of the window
+    skew_min_fair: float = 0.75         # model conviction floor for the favored side
     skew_threshold: float = 0.05
     skew_step_shares: float = 10
     max_skew_shares: float = 40

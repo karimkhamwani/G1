@@ -150,20 +150,21 @@ with all state journaled to disk.
   1. **`BaseEntrySignal`** — early in the cycle (within `entry_window_s` of open, spread
      sane): buy `base_shares` of each side. No combined-cost gate — the goal is to be
      positioned before the window's swings, not to nail the first price.
-  2. **`ScaleAddSignal`** — fires only when ALL of: (a) the side's best ask is at least
-     `add_trigger_drop` below its running average cost, (b) **model gate**: the ask is
-     also below fair value (fees are not modeled), (c) **regime gate**: the
-     window currently classifies as choppy. Buys `add_step_shares` (± random jitter in
-     size and price so the ladder doesn't telegraph a repeating pattern to the book).
-     Governed by the duration-scaled ladder: at most `max_adds_per_side` adds, step
-     spacing and sizing derived from the market length (5m → few fast steps, 15m → more,
-     wider), steps shrinking as time remaining decays. Never adds to a side above its
-     own average (no averaging up through Layer 1).
-  3. **`SkewSignal`** — confluence detected: Binance-implied direction
-     (`fair_yes` vs 0.5, from spot + drift) and the book's own lean (imbalance + mid
-     drift) agree, and the gap exceeds `skew_threshold`. Buy `skew_step_shares` on the
-     favored side; repeatable while confluence persists, up to `max_skew_shares`.
-     Confluence lost → stop adding (optionally trim skew into strength).
+  2. **`ScaleAddSignal`** — adds a MATCHED PAIR: both sides at once, equal shares. A
+     matched pair pays exactly $1 at resolution regardless of direction, so a pair
+     bought under $1 is locked profit and needs no directional model or regime call.
+     Fires when the combined ask (`ask_yes + ask_no`) is ≤ `pair_add_max`, or below
+     the position's own combined average by `add_trigger_drop`. Sized by the
+     duration-scaled ladder (at most `max_adds_per_side` pair-adds, steps shrinking,
+     ± jitter), with both legs sized together so the cheaper leg clears the exchange's
+     $1 minimum notional.
+  3. **`SkewSignal`** — a LATE-WINDOW conviction trade, not an all-window momentum
+     chase: fires only in the final `skew_window_s` seconds (above the
+     `final_blackout_s` floor), when the model is saturated-confident
+     (`fair_side ≥ skew_min_fair`, i.e. spot clearly past the strike with little time
+     left), the fair-vs-mid gap exceeds `skew_threshold`, AND the book's depth
+     imbalance agrees. Buys `skew_step_shares` on the favored side up to
+     `max_skew_shares`; confluence lost → stop adding.
 - **Regime classifier** — maintained per active window from spot ticks: chop score,
   drift persistence, and realized vol. Published with every signal so the backtest can
   split results by regime.

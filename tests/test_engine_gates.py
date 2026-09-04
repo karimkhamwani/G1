@@ -81,57 +81,77 @@ def buy(side, price, shares, signal=SignalType.BASE_ENTRY):
                 shares=shares, fee=0.0, signal=signal)
 
 
-def test_regime_gate_blocks_adds_in_trend():
-    # one-way move: strike 100000 -> now 100400, tiny range around the path
+def test_no_pair_add_when_pair_is_not_cheap():
+    # one-way move: NO got cheap but YES got expensive — the PAIR (0.88 + 0.12 = 1.00)
+    # is not below PAIR_ADD_MAX, so no add: pairs only, never one-sided chasing
     trend_prices = [100_000 + i * 40 for i in range(11)]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    # NO got cheap (trend against NO) — the classic trap this gate must refuse
     _, _, rt, ex, eng = make_env(trend_prices, 100_400, top(0.85, 0.88), top(0.10, 0.12), fills)
     eng.evaluate(rt)
-    assert rt.regime.trending
     assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
 
 
-def test_model_gate_blocks_fairly_priced_dip():
-    # choppy window, NO ask dropped below our avg, but fair_no is ~equal to the ask:
-    # cheap vs our average, NOT cheap vs the model -> no add
+def test_normal_spread_pair_is_too_expensive():
+    # a normal book (0.62 + 0.40 = 1.02) never triggers a pair add — buying both
+    # sides above $1 combined is a guaranteed loss on matched shares
     chop = [100_000, 100_060, 99_950, 100_050, 99_960, 100_040]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
     _, _, rt, ex, eng = make_env(chop, 100_050, top(0.60, 0.62), top(0.38, 0.40),
                                  fills, drift=2e-6)
     eng.evaluate(rt)
-    fair_no = 1 - rt.fair_yes
-    assert not rt.regime.trending
-    adds = [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
-    for a in adds:  # any add that did fire must have been below fair value
-        side_fair = rt.fair_yes if a.side is Side.YES else fair_no
-        assert a.price < side_fair
+    assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
 
 
-def test_add_fires_when_all_gates_pass():
-    # choppy, spot back near strike -> fair_no ~0.5, NO ask 0.35 is genuinely cheap
+def test_pair_add_fires_on_both_sides():
+    # combined ask 0.64 + 0.33 = 0.97 <= PAIR_ADD_MAX: buy BOTH sides, equal shares
     chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    _, _, rt, ex, eng = make_env(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35), fills)
+    _, _, rt, ex, eng = make_env(chop, 100_000, top(0.60, 0.64), top(0.31, 0.33), fills)
     eng.evaluate(rt)
     adds = [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
-    assert adds and adds[0].side is Side.NO
+    assert {a.side for a in adds} == {Side.YES, Side.NO}
+    assert len({a.shares for a in adds}) == 1   # equal shares on both legs
 
 
-def test_skew_needs_confluence():
+def _late_window(rt):
+    """Put the market inside the skew window (last 60s, above the 20s blackout)."""
+    rt.market.end_ts = time.time() + 45
+
+
+def test_skew_needs_confluence_and_late_window():
     chop = [100_000, 100_080, 99_930, 100_060, 100_010]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    # model says YES (fair >> mid) but book imbalance is FLAT -> no skew
+    # 1) confluence + conviction, but EARLY in the window (t_rem 180s) -> no skew
+    _, _, rt0, ex0, eng0 = make_env(chop, 100_150, top(0.55, 0.57, 900, 100),
+                                    top(0.43, 0.45, 100, 900), fills, drift=3e-6)
+    eng0.evaluate(rt0)
+    assert not [i for i in ex0.intents if i.signal is SignalType.SKEW]
+    # 2) late window, model says YES but book imbalance is FLAT -> no skew
     _, _, rt, ex, eng = make_env(chop, 100_150, top(0.55, 0.57, 500, 500),
                                  top(0.43, 0.45, 500, 500), fills, drift=3e-6)
+    _late_window(rt)
     eng.evaluate(rt)
     assert not [i for i in ex.intents if i.signal is SignalType.SKEW]
-    # same model view WITH book agreement (bid depth >> ask depth) -> skew fires
+    # 3) late window + model conviction + book agreement -> skew fires
     _, _, rt2, ex2, eng2 = make_env(chop, 100_150, top(0.55, 0.57, 900, 100),
                                     top(0.43, 0.45, 100, 900), fills, drift=3e-6)
+    _late_window(rt2)
     eng2.evaluate(rt2)
     skews = [i for i in ex2.intents if i.signal is SignalType.SKEW]
     assert skews and skews[0].side is Side.YES
+    assert rt2.fair_yes >= 0.75          # the conviction floor really was met
+
+
+def test_skew_blocked_below_conviction_floor():
+    # late window, book agrees, but spot is barely past the strike: fair ~< 0.75
+    chop = [100_000, 100_030, 99_980, 100_020, 100_010]
+    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
+    _, _, rt, ex, eng = make_env(chop, 100_010, top(0.55, 0.57, 900, 100),
+                                 top(0.43, 0.45, 100, 900), fills)
+    _late_window(rt)
+    eng.evaluate(rt)
+    assert rt.fair_yes is None or rt.fair_yes < 0.75
+    assert not [i for i in ex.intents if i.signal is SignalType.SKEW]
 
 
 def test_regime_classifier_labels():
@@ -183,25 +203,15 @@ def test_pending_order_blocks_duplicate_add():
     chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
     ex = PendingAwareExecutor()
-    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35),
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.31, 0.33),
                                       fills, executor=ex)
     eng.evaluate(rt)
     n_first = len([i for i in ex.intents if i.signal is SignalType.SCALE_ADD])
-    assert n_first == 1
-    rt.last_eval_ts = 0            # bypass throttle; conditions unchanged, order pending
+    assert n_first == 2            # one pair = two legs
+    rt.last_eval_ts = 0            # bypass throttle; conditions unchanged, orders pending
     eng.evaluate(rt)
     n_second = len([i for i in ex.intents if i.signal is SignalType.SCALE_ADD])
-    assert n_second == 1           # no duplicate while the first order is working
-
-
-def test_divergence_clamp_blocks_adds():
-    # YES ask crashed to 0.22 while the model still says ~0.5: 0.29 divergence means
-    # the MODEL is suspect - no ladder add, even though the trigger and model gate pass
-    chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
-    fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.20, 0.22), top(0.75, 0.78), fills)
-    eng.evaluate(rt)
-    assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
+    assert n_second == 2           # no duplicate pair while the first is working
 
 
 def test_skew_tp_churn_guard():
@@ -210,6 +220,7 @@ def test_skew_tp_churn_guard():
     # confluence + sane price, but TP already fired once -> churn guard blocks rebuy
     _, _, rt2, ex2, eng2 = make_env_exec(chop, 100_150, top(0.55, 0.57, 900, 100),
                                          top(0.43, 0.45, 100, 900), fills, drift=3e-6)
+    rt2.market.end_ts = time.time() + 45   # inside the skew window
     rt2.position.tp_taken.add(0.90)
     eng2.evaluate(rt2)
     assert not [i for i in ex2.intents if i.signal is SignalType.SKEW]
@@ -232,7 +243,7 @@ def test_base_leg_repair_fires_once():
 def test_window_age_gate_blocks_early_adds():
     chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35),
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.31, 0.33),
                                       fills, start_offset=5)  # window only 5s old
     eng.evaluate(rt)
     assert not [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
@@ -241,23 +252,26 @@ def test_window_age_gate_blocks_early_adds():
 def test_failed_order_backoff_blocks_refire():
     chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.50, 20)]
-    _, hub, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.33, 0.35), fills)
+    _, hub, rt, ex, eng = make_env_exec(chop, 100_000, top(0.60, 0.64), top(0.31, 0.33), fills)
     n1 = len(eng.evaluate(rt))
-    assert n1 == 1                      # the NO scale-add fires
+    assert n1 == 2                      # the pair fires (both legs)
     intent = ex.intents[-1]
-    hub.order_closed(intent, 0.0)       # order died unfilled -> side backs off
+    hub.order_closed(intent, 0.0)       # one leg died unfilled -> that side backs off
     rt.last_eval_ts = 0
-    assert eng.evaluate(rt) == []       # still-true trigger held back by backoff
+    assert eng.evaluate(rt) == []       # a blocked side blocks the whole pair
     rt.position.blocked_until[intent.side] = 0.0   # backoff expires
     rt.last_eval_ts = 0
-    assert len(eng.evaluate(rt)) == 1   # now it may retry
+    assert len(eng.evaluate(rt)) == 2   # the pair may retry
 
 
-def test_min_notional_bumps_cheap_buys():
-    # NO ask at 0.12: 5 shares = $0.60 < $1 minimum -> bumped to 9 shares (~$1.08)
+def test_min_notional_sizes_the_pair_together():
+    # cheap leg at 0.12: 5 shares = $0.60 < $1 minimum -> BOTH legs sized up equally
+    # (0.84 + 0.12 = 0.96 <= PAIR_ADD_MAX so the pair triggers)
     chop = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
     fills = [buy(Side.YES, 0.50, 20), buy(Side.NO, 0.30, 20)]
-    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.86, 0.88), top(0.10, 0.12), fills)
+    _, _, rt, ex, eng = make_env_exec(chop, 100_000, top(0.82, 0.84), top(0.10, 0.12), fills)
     eng.evaluate(rt)
-    for i in ex.intents:
+    adds = [i for i in ex.intents if i.signal is SignalType.SCALE_ADD]
+    assert adds and len({a.shares for a in adds}) == 1   # legs stay equal
+    for i in adds:
         assert i.price * i.shares >= 1.0, (i.signal, i.price, i.shares)
