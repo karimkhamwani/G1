@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     dir_step_shares: float = 5          # shares per bet
     dir_conf_step: float = 0.02         # confidence OR book ask must rise this much for the next bet
     dir_exit_below: float = 0.45        # sell ALL if the held side's ask AND confidence <= this
+    dir_no_trade_first_s: int = 30      # no directional bets in the first N seconds of a window
     buy_order_type: str = "FOK"         # FOK (all-or-nothing) or FAK (partial fills allowed)
 
     skew_enabled: bool = True           # False = layer 2 never opens a position

@@ -12,12 +12,12 @@ from tests.test_engine_gates import (CollectingExecutor, FakeSpot, NullRecorder,
 CHOP = [100_000, 100_080, 99_920, 100_070, 99_930, 100_005]
 
 
-def make_dir(spot_now, book_yes, book_no, fills=(), **overrides):
+def make_dir(spot_now, book_yes, book_no, fills=(), start_offset=120, **overrides):
     s = Settings(_env_file=None, dashboard_port=0, strategy="directional", **overrides)
     hub = Hub()
     now = time.time()
     m = Market(condition_id="c1", slug="t", question="t?", asset="BTC", duration_s=300,
-               start_ts=now - 120, end_ts=now + 180,
+               start_ts=now - start_offset, end_ts=now + 180,
                token={Side.YES: "ty", Side.NO: "tn"}, strike=100_000.0)
     rt = MarketRuntime(market=m)
     rt.books[Side.YES], rt.books[Side.NO] = book_yes, book_no
@@ -181,3 +181,14 @@ def test_ask_rise_alone_unlocks_next_bet():
     eng.evaluate(rt)
     assert len(dir_fills(ex)) == 2
     assert dir_fills(ex)[1].price == 0.76
+
+
+def test_no_bets_in_first_30_seconds():
+    # both thresholds met, but the window is only 15s old -> wait
+    _, _, rt, ex, eng, _ = make_dir(100_150, top(0.72, 0.74), top(0.24, 0.26), start_offset=15)
+    eng.evaluate(rt)
+    assert dir_fills(ex) == []
+    # same conditions at 31s -> bet
+    _, _, rt2, ex2, eng2, _ = make_dir(100_150, top(0.72, 0.74), top(0.24, 0.26), start_offset=31)
+    eng2.evaluate(rt2)
+    assert len(dir_fills(ex2)) == 1

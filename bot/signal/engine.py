@@ -82,7 +82,7 @@ class SignalEngine:
 
         intents: list[OrderIntent] = []
         if self.s.strategy == "directional":
-            intents += self._directional(rt, fair_of, t_rem)
+            intents += self._directional(rt, fair_of, t_rem, now)
         else:
             intents += self._base_entry(rt, now)
             intents += self._scale_adds(rt, now)
@@ -92,7 +92,7 @@ class SignalEngine:
         return self._submit(rt, intents, fair, regime, sigma, drift, spot.price, t_rem)
 
     # ---- directional strategy: one-sided conviction bets --------------------------
-    def _directional(self, rt, fair_of: dict, t_rem: float) -> list[OrderIntent]:
+    def _directional(self, rt, fair_of: dict, t_rem: float, now: float) -> list[OrderIntent]:
         """Two conditions, both required: model confidence on a side >= DIR_CONF_MIN
         AND that side's ask >= DIR_MIN_ENTRY_PRICE (the book backs it too). First bet
         DIR_STEP_SHARES; further bets only while both thresholds still hold and EITHER
@@ -149,6 +149,10 @@ class SignalEngine:
             rt.confluence_dir = 0
             return []
         rt.confluence_dir = 1 if side is Side.YES else -1
+        # warm-up timer: no bets in the first DIR_NO_TRADE_FIRST_S of the window — at
+        # the open spot == strike and the book is still forming, so let it develop
+        if now - m.start_ts < self.s.dir_no_trade_first_s:
+            return []
         if self._pending(m.condition_id, side) > 0.5:
             return []   # a bet is working (or backing off after a kill)
         # after the first fill, both thresholds must still HOLD (checked above) and
