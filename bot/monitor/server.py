@@ -64,7 +64,7 @@ def build_app(hub, spot_feed, executor, risk, trades_path=None) -> FastAPI:
     @app.get("/api/trades.csv", response_class=PlainTextResponse)
     async def trades_csv() -> str:
         """Every fill ever recorded, straight from the trade log."""
-        cols = ["ts", "market", "market_id", "side", "action", "price", "shares", "fee", "signal"]
+        cols = ["ts", "market", "market_id", "side", "action", "price", "shares", "fee", "signal", "latency_ms"]
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(cols)

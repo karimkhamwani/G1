@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 
 import websockets
@@ -43,6 +44,8 @@ class LiveExecutor:
         self.creds = None
         self._consec_errors = 0
         self._cooldown_until = 0.0
+        # dedicated pool: order placement never queues behind cancels/fee fetches
+        self._order_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="order")
         # The user channel re-sends each trade as its status advances
         # (MATCHED -> MINED -> CONFIRMED), so a fill must be booked exactly once.
         self._seen_trades: OrderedDict[str, None] = OrderedDict()
@@ -75,6 +78,15 @@ class LiveExecutor:
         else:
             self.creds = self.client.create_or_derive_api_key()
         self.client.set_api_creds(self.creds)
+        try:
+            import httpx
+            from py_clob_client_v2.http_helpers import helpers as _h
+            _h._http_client = httpx.Client(
+                http2=True,
+                limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=60.0),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not extend HTTP keep-alive: %s", e)
         log.info("CLOB client ready (py-clob-client-v2, L2 auth)")
 
     def _track(self, coro) -> asyncio.Task:
@@ -115,6 +127,7 @@ class LiveExecutor:
         pending = [t for t in self._bg if not t.done()]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        self._order_pool.shutdown(wait=False)
 
     def open_shares(self, market_id: str, side) -> float:
         """BUY shares working for this market/side: in-flight placements + resting."""
@@ -139,7 +152,19 @@ class LiveExecutor:
 
     async def run(self) -> None:
         await self._reconcile_startup()
-        await asyncio.gather(self._user_channel(), self._sweep_loop())
+        await asyncio.gather(self._user_channel(), self._sweep_loop(),
+                             self._keepalive_loop())
+
+    async def _keepalive_loop(self) -> None:
+        """Ping the CLOB every 15s so the HTTPS connection is already open when an
+        order fires — a cold TCP+TLS+HTTP/2 handshake costs hundreds of ms."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await loop.run_in_executor(None, self.client.get_ok)
+            except Exception:  # noqa: BLE001
+                pass   # transient; the next order retries anyway
 
     # ---- startup reconciliation -----------------------------------------------
     async def _reconcile_startup(self) -> None:
@@ -202,15 +227,21 @@ class LiveExecutor:
             # with ZERO metadata round-trips — the POST is the only network hop left
             options = PartialCreateOrderOptions(tick_size=f"{tick:g}",
                                                 neg_risk=rt.market.neg_risk)
+            queue_ms = round((time.time() - intent.created_ts) * 1000)
+
             def _sign_and_post():
                 # both steps in ONE background thread: signing is ~1ms local CPU and
                 # posting strictly depends on it, so a second thread handoff between
                 # them would only add latency
+                t0 = time.time()
                 signed = self.client.create_order(args, options)
-                return self.client.post_order(signed, order_type=order_type)
+                t1 = time.time()
+                resp = self.client.post_order(signed, order_type=order_type)
+                return resp, round((t1 - t0) * 1000), round((time.time() - t1) * 1000)
 
             try:
-                resp = await loop.run_in_executor(None, _sign_and_post)
+                resp, sign_ms, post_ms = await loop.run_in_executor(
+                    self._order_pool, _sign_and_post)
                 oid = (resp or {}).get("orderID") or (resp or {}).get("orderId")
                 if not oid:
                     log.warning("order rejected: %s", resp)
@@ -220,7 +251,8 @@ class LiveExecutor:
                     return
                 spot = self.spots.get(rt.market.asset)
                 order = Order(intent=intent, status=OrderStatus.RESTING,
-                              spot_at_place=spot.price if spot else None, exchange_id=oid)
+                              spot_at_place=spot.price if spot else None, exchange_id=oid,
+                              latency_ms=round((time.time() - intent.created_ts) * 1000))
                 self.orders[oid] = order
                 self._consec_errors = 0
                 latency_ms = round((time.time() - intent.created_ts) * 1000)
@@ -229,10 +261,11 @@ class LiveExecutor:
                                             "action": intent.action.value, "price": price,
                                             "shares": intent.shares, "signal": intent.signal.value,
                                             "order_type": order_type, "status": "PLACED",
-                                            "latency_ms": latency_ms})
-                log.info("placed %s %s %.1f @ %.3f (%s, %dms signal->exchange)",
+                                            "latency_ms": latency_ms, "queue_ms": queue_ms,
+                                            "sign_ms": sign_ms, "post_ms": post_ms})
+                log.info("placed %s %s %.1f @ %.3f (%s, %dms = q%d + sign%d + post%d)",
                          intent.action.value, intent.side.value, intent.shares, price,
-                         order_type, latency_ms)
+                         order_type, latency_ms, queue_ms, sign_ms, post_ms)
             except Exception as e:  # noqa: BLE001
                 if "no orders found to match" in str(e).lower():
                     # NOT an error: this is FAK's normal no-liquidity outcome — the
@@ -391,7 +424,7 @@ class LiveExecutor:
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,
                     shares=size, fee=fee, signal=i.signal, order_id=i.id)
-        rec = self.hub.on_fill(fill)
+        rec = self.hub.on_fill(fill, latency_ms=order.latency_ms)
         self.recorder.log("fill", rec)
         log.info("LIVE FILL %s %s %.1f @ %.3f", i.action.value, i.side.value, size, price)
 

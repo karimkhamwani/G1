@@ -79,7 +79,7 @@ button.danger{background:#5a1e1e;border-color:var(--red);color:var(--red)}
     <div class="panel" style="margin-top:12px">
       <h2>Fills tape <a href="/api/trades.csv" style="color:var(--blue);font-size:10px">all trades csv ↓</a></h2>
       <div class="scroll"><table class="list" id="fills">
-        <thead><tr><th>market</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>cost</th><th>signal</th></tr></thead>
+        <thead><tr><th>market</th><th>act</th><th>side</th><th>px</th><th>sh</th><th>cost</th><th>signal</th><th>lat</th></tr></thead>
         <tbody></tbody></table></div>
     </div>
     <div class="panel" style="margin-top:12px">
@@ -168,7 +168,8 @@ function tape(s){
      <td class="${f.action==='BUY'?'pos':'neg'}">${f.action[0]}</td>
      <td>${f.side}</td><td>${fmt(f.price,3)}</td><td>${f.shares}</td>
      <td title="incl. fee ${fmt(f.fee,3)}">$${fmt(f.price*f.shares+(f.action==='BUY'?1:-1)*(f.fee||0))}</td>
-     <td class="dim">${f.signal.replace('_',' ').toLowerCase()}</td></tr>`).join('');
+     <td class="dim">${f.signal.replace('_',' ').toLowerCase()}</td>
+     <td class="${f.latency_ms==null?'dim':f.latency_ms<=500?'pos':f.latency_ms<=1500?'':'neg'}">${f.latency_ms==null?'\u2013':f.latency_ms+'ms'}</td></tr>`).join('');
   $('history').tBodies[0].innerHTML=s.history.slice().reverse().map(h=>
     `<tr><td>${hhmm(h.ts)}</td><td class="dim" style="max-width:180px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${h.question}</td>
      <td>${h.winner}</td><td class="${cls(h.pnl)}">${fmt(h.pnl)}</td>

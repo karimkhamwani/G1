@@ -130,6 +130,7 @@ class Order:
     filled_shares: float = 0.0
     spot_at_place: float | None = None
     exchange_id: str | None = None
+    latency_ms: int | None = None    # signal -> exchange placement latency
 
     @property
     def remaining(self) -> float:

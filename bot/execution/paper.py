@@ -160,7 +160,7 @@ class PaperExecutor:
         order.status = OrderStatus.FILLED if order.remaining < 0.5 else OrderStatus.PARTIAL
         fill = Fill(market_id=i.market_id, side=i.side, action=i.action, price=price,
                     shares=shares, fee=fee, signal=i.signal, order_id=i.id)
-        rec = self.hub.on_fill(fill)
+        rec = self.hub.on_fill(fill, latency_ms=round((time.time() - i.created_ts) * 1000))
         self.recorder.log("fill", rec)
         log.info("FILL %s %s %.1f @ %.3f (%s)", i.action.value, i.side.value, shares, price, i.signal.value)
 

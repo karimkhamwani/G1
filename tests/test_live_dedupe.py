@@ -10,7 +10,7 @@ class _Rec:
 
 class _Hub:
     def __init__(self): self.fills = []; self.markets = {}
-    def on_fill(self, f): self.fills.append(f); return {"shares": f.shares}
+    def on_fill(self, f, latency_ms=None): self.fills.append(f); return {"shares": f.shares}
 
 
 def _executor():

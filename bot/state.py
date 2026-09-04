@@ -67,11 +67,13 @@ class Hub:
         return sum(1 for rt in self.markets.values()
                    if not rt.resolved and rt.position.total_shares > 0)
 
-    def on_fill(self, fill: Fill) -> dict:
+    def on_fill(self, fill: Fill, latency_ms: int | None = None) -> dict:
         """Apply the fill and return its enriched record (with a short market label)
         — executors log this exact record to the trade log."""
         rt = self.markets.get(fill.market_id)
         rec = fill.as_dict()
+        if latency_ms is not None:
+            rec["latency_ms"] = latency_ms
         if rt:
             rt.position.apply_fill(fill)
             rec["market"] = rt.market.question or rt.market.slug
