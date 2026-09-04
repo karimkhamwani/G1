@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     dir_conf_min: float = 0.75          # model confidence required on a side
     dir_min_entry_price: float = 0.70   # ... AND that side's ask must be at or ABOVE this
                                         # (the book agrees with the model)
-    dir_require_edge: bool = True       # safety: never pay an ask at/above the model's fair value
+    dir_require_edge: bool = False      # optional: also require ask < model fair value (off:
+                                        # both thresholds met = enter, whichever crossed first)
     dir_market_budget_usdc: float = 10  # hard cap on total spend per market
     dir_step_shares: float = 5          # shares per bet
     dir_conf_step: float = 0.02         # confidence must rise this much for the next bet

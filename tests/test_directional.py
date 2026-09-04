@@ -50,10 +50,20 @@ def test_no_bet_if_either_condition_fails():
     _, _, rt, ex, eng, _ = make_dir(100_150, top(0.60, 0.62), top(0.36, 0.38))
     eng.evaluate(rt)
     assert dir_fills(ex) == []
-    # both agree, but the ask (0.92) is above the model's fair (~0.87): no edge -> no bet
-    _, _, rt3, ex3, eng3, _ = make_dir(100_150, top(0.90, 0.92), top(0.06, 0.08))
-    eng3.evaluate(rt3)
-    assert rt3.fair_yes < 0.92 and dir_fills(ex3) == []
+
+
+def test_book_ahead_of_model_still_enters():
+    # the BOOK crossed first (ask 0.92) and the model is behind it (~0.87) but above
+    # its own 0.75 threshold: both thresholds met -> enter, order of crossing irrelevant
+    _, _, rt, ex, eng, _ = make_dir(100_150, top(0.90, 0.92), top(0.06, 0.08))
+    eng.evaluate(rt)
+    assert 0.75 <= rt.fair_yes < 0.92
+    assert len(dir_fills(ex)) == 1
+    # the optional edge gate, when switched on, refuses to pay above the model's fair
+    _, _, rt2, ex2, eng2, _ = make_dir(100_150, top(0.90, 0.92), top(0.06, 0.08),
+                                       dir_require_edge=True)
+    eng2.evaluate(rt2)
+    assert dir_fills(ex2) == []
     # cheap book but no confidence (spot barely moved -> fair ~0.5)
     _, _, rt2, ex2, eng2, _ = make_dir(100_005, top(0.48, 0.50), top(0.48, 0.50))
     eng2.evaluate(rt2)

@@ -123,7 +123,8 @@ class SignalEngine:
         if top.ask is None or top.ask < self.s.dir_min_entry_price:
             rt.confluence_dir = 0
             return []
-        # safety: paying more than the model thinks it's worth is negative expectancy
+        # optional extra gate (off by default): whichever crossed its threshold first,
+        # both above threshold is the entry — the book may well be ahead of the model
         if self.s.dir_require_edge and top.ask >= conf:
             rt.confluence_dir = 0
             return []
