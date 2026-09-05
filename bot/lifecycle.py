@@ -2,7 +2,7 @@
 
 Settlement is OFFICIAL-FIRST: the window's real result comes from Polymarket
 (Gamma `outcomePrices` once `umaResolutionStatus=resolved`) because the oracle is a
-Chainlink 60s TWAP — the last Binance tick can disagree in the final seconds (a
+Chainlink 60s TWAP — the last spot-feed tick can disagree in the final seconds (a
 last-second dip barely moves a 60s TWAP), which used to book winning trades as
 losses. The spot proxy is only a timeout fallback.
 """

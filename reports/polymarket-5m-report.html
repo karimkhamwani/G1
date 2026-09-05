@@ -1,0 +1,230 @@
+<title>Five-Minute Market Forensics</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Source+Sans+3:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{color-scheme:light;
+ --bg:#f6f7f7;--paper:#ffffff;--ink:#14181d;--ink-2:#4a535c;--ink-3:#7a838c;--rule:#d9dde1;--rule-soft:#e9ecee;
+ --accent:#1c5cab;--pos:#2a78d6;--pos-soft:#cde2fb;--neg:#e34948;--neg-soft:#fadada;--warn:#eda100;--mark:#fff3c4;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;
+ --bg:#15181c;--paper:#1c2026;--ink:#eef1f4;--ink-2:#b4bcc4;--ink-3:#7f8891;--rule:#333a42;--rule-soft:#262c33;
+ --accent:#6da7ec;--pos:#3987e5;--pos-soft:#184f95;--neg:#e66767;--neg-soft:#5a2626;--warn:#c98500;--mark:#4a3d10;}}
+:root[data-theme="dark"]{color-scheme:dark;
+ --bg:#15181c;--paper:#1c2026;--ink:#eef1f4;--ink-2:#b4bcc4;--ink-3:#7f8891;--rule:#333a42;--rule-soft:#262c33;
+ --accent:#6da7ec;--pos:#3987e5;--pos-soft:#184f95;--neg:#e66767;--neg-soft:#5a2626;--warn:#c98500;--mark:#4a3d10;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 "Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:960px;margin:0 auto;padding:48px 24px 96px}
+header.masthead{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:end;border-bottom:2px solid var(--ink);padding-bottom:20px;margin-bottom:40px}
+.kicker{font:500 12px/1 "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+h1{font:500 44px/1.05 "Newsreader",Georgia,serif;letter-spacing:-.01em;margin:10px 0 8px;text-wrap:balance}
+.dek{font:italic 400 20px/1.35 "Newsreader",Georgia,serif;color:var(--ink-2);max-width:60ch;margin:0}
+.meta{font:400 13px/1.6 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink-3);text-align:right;white-space:nowrap}
+h2{font:500 30px/1.15 "Newsreader",Georgia,serif;margin:56px 0 14px;text-wrap:balance;letter-spacing:-.005em}
+h3{font:600 17px/1.3 "Source Sans 3",sans-serif;margin:28px 0 8px;letter-spacing:.005em}
+p{max-width:68ch;margin:0 0 14px}
+ul,ol{max-width:68ch;padding-left:22px;margin:0 0 16px} li{margin:0 0 8px} li>b{font-weight:600}
+.lede{font-size:19px}
+.mono,code,td.n,th.n{font-family:"IBM Plex Mono",ui-monospace,monospace}
+code{font-size:.9em;background:var(--rule-soft);padding:1px 5px;border-radius:3px}
+.addr{font:400 13px/1.5 "IBM Plex Mono",ui-monospace,monospace;word-break:break-all;color:var(--ink-2)}
+.callout{border-left:3px solid var(--accent);padding:10px 18px;margin:20px 0 24px;background:var(--paper);max-width:72ch}
+.callout p{margin:0}
+.verdict{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule);margin:28px 0 8px;border:1px solid var(--rule)}
+.verdict>div{background:var(--paper);padding:16px 18px}
+.verdict .l{font:500 12px/1 "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.verdict .v{font:500 34px/1 "Newsreader",Georgia,serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.verdict .v.neg{color:var(--neg)} .verdict .v.pos{color:var(--pos)}
+.verdict .s{font-size:14px;color:var(--ink-2);margin-top:8px}
+figure{margin:24px 0 28px;background:var(--paper);border:1px solid var(--rule);padding:18px 18px 12px}
+figcaption{font-size:14px;color:var(--ink-2);margin-top:8px;max-width:80ch}
+figcaption b{color:var(--ink);font-weight:600}
+.chart{width:100%;height:auto;display:block;font-family:"IBM Plex Mono",monospace}
+.chart .grid{stroke:var(--rule-soft);stroke-width:1} .chart .zero{stroke:var(--ink-3);stroke-width:1}
+.chart .tick,.chart .lab,.chart .val,.chart .endlab{fill:var(--ink-2);font-size:11.5px} .chart .lab{fill:var(--ink)} .chart .val{font-variant-numeric:tabular-nums}
+.chart .line{fill:none;stroke:var(--pos);stroke-width:2;stroke-linejoin:round} .chart .area{fill:var(--pos);opacity:.10}
+.chart .end{fill:var(--pos)} .chart .endlab{fill:var(--ink);font-weight:500}
+.chart .bar.pos{fill:var(--pos)} .chart .bar.neg{fill:var(--neg)}
+.chart .hit{fill:transparent;cursor:crosshair} .chart .hit:hover{fill:var(--pos);opacity:.35}
+.tbl{overflow-x:auto;margin:16px 0 24px;border:1px solid var(--rule);background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th{text-align:left;font:500 12px/1.2 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);padding:12px 14px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:9px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+td:not(:first-child),th:not(:first-child){text-align:right}
+td.n{font-size:14px} tr.hl td{background:var(--mark)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media (max-width:720px){.two,.verdict{grid-template-columns:1fr} h1{font-size:34px} header.masthead{grid-template-columns:1fr} .meta{text-align:left;white-space:normal}}
+.fn{font-size:14px;color:var(--ink-2);border-top:1px solid var(--rule);padding-top:16px;margin-top:48px;max-width:72ch}
+.pill{display:inline-block;font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;padding:4px 7px;border:1px solid var(--rule);border-radius:2px;color:var(--ink-2);vertical-align:middle;margin-left:6px}
+.pill.neg{color:var(--neg);border-color:var(--neg)} .pill.pos{color:var(--pos);border-color:var(--pos)}
+.small{font-size:14px;color:var(--ink-2)}
+</style>
+<div class="wrap">
+<header class="masthead">
+ <div>
+  <div class="kicker">Polymarket · BTC / ETH 5-minute Up-or-Down</div>
+  <h1>Five-Minute Market Forensics</h1>
+  <p class="dek">How one Polygon wallet extracts $360K from five-minute coin flips, who else is doing it, and why the paper bot in this repo bleeds where they profit.</p>
+ </div>
+ <div class="meta">Prepared 2026-09-05<br>Data: Polymarket data-api, gamma-api,<br>user-pnl-api, Polygon RPC, Binance klines,<br>data/trades.jsonl (paper run)</div>
+</header>
+
+<p class="lede">The question started as one address. It ends as a playbook: the wallets that win these markets buy cheap, hedge both sides, never sell, and run every single window. The paper bot does the opposite on every count. This note lays out the evidence, the sizing math, the competitive field, and the specific changes the paper run argues for.</p>
+
+<div class="verdict">
+ <div><div class="l">Whale · all-time</div><div class="v pos">$362K</div><div class="s">79 of 85 days profitable · max drawdown $48</div></div>
+ <div><div class="l">Whale · margin</div><div class="v">1.5%</div><div class="s">of capital deployed per window, net of fees</div></div>
+ <div><div class="l">Paper bot · 12 h</div><div class="v neg">$-72</div><div class="s">309 markets · 65% winners · all loss from stops</div></div>
+</div>
+
+<h2>1. The wallet</h2>
+<p><span class="addr">0x3048d65321be3497164cdfc2996f94f98a2e7537</span></p>
+<p>On Polygon the address holds a minimal proxy contract, which is what Polymarket deploys for every account. It is not a raw wallet. Its idle USDC balance was zero at the time of the snapshot, with about $15.6K sitting in open positions. Polymarket's profile lists it as <b>x-MoneyForWhiskas</b> (pseudonym Flashy-Gold, bio "Trading to pay for my cat's food"), created June 8, 2026, taker tier Obsidian, weighted volume about $4.2M, 22,766 markets traded.</p>
+
+<div class="tbl"><table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Cumulative profit since 2026-06-11</td><td>$362,056</td></tr>
+<tr><td>Monthly: Jun / Jul / Aug / Sep (3 days)</td><td>$26.3K / $115.6K / $174.3K / $45.8K</td></tr>
+<tr><td>Profitable days</td><td>79 of 85</td></tr>
+<tr><td>Median day / best day / worst day</td><td>+$3,641 / +$13,462 (Sep 2) / −$28 (Jun 14)</td></tr>
+<tr><td>Maximum drawdown from peak</td><td>$48</td></tr>
+<tr><td>Daily leaderboard (Sep 3)</td><td>rank 140 · $10.0K profit on $919K volume</td></tr>
+<tr><td>Open positions / idle USDC at snapshot</td><td>$15,577 / $0</td></tr>
+</table></div>
+
+<figure><svg class="chart" viewBox="0 0 720 260" role="img" aria-label="Cumulative profit of x-MoneyForWhiskas, June 11 to September 3, 2026"><line class="grid" x1="64" x2="704" y1="226.0" y2="226.0"/><text class="tick" x="56" y="230.0" text-anchor="end">$0k</text><line class="grid" x1="64" x2="704" y1="166.9" y2="166.9"/><text class="tick" x="56" y="170.9" text-anchor="end">$100k</text><line class="grid" x1="64" x2="704" y1="107.8" y2="107.8"/><text class="tick" x="56" y="111.8" text-anchor="end">$200k</text><line class="grid" x1="64" x2="704" y1="48.7" y2="48.7"/><text class="tick" x="56" y="52.7" text-anchor="end">$300k</text><line class="zero" x1="64" x2="704" y1="226.0" y2="226.0"/><path class="area" d="M64.0,226.0 L71.5,226.0 L79.1,226.0 L86.6,226.0 L94.1,226.0 L101.6,225.9 L109.2,225.6 L116.7,224.6 L124.2,223.7 L131.8,222.7 L139.3,222.4 L146.8,221.7 L154.4,221.3 L161.9,220.3 L169.4,218.6 L176.9,217.2 L184.5,214.9 L192.0,213.6 L199.5,212.0 L207.1,210.4 L214.6,208.9 L222.1,206.6 L229.6,205.5 L237.2,203.8 L244.7,202.7 L252.2,201.8 L259.8,200.5 L267.3,198.8 L274.8,197.2 L282.4,195.3 L289.9,194.2 L297.4,193.0 L304.9,191.1 L312.5,188.4 L320.0,183.9 L327.5,179.5 L335.1,176.4 L342.6,173.3 L350.1,171.5 L357.6,168.2 L365.2,164.2 L372.7,161.1 L380.2,157.0 L387.8,152.4 L395.3,148.5 L402.8,146.4 L410.4,143.6 L417.9,142.7 L425.4,142.7 L432.9,142.7 L440.5,142.1 L448.0,137.9 L455.5,137.0 L463.1,134.9 L470.6,131.6 L478.1,129.3 L485.6,127.1 L493.2,122.7 L500.7,119.5 L508.2,116.9 L515.8,116.0 L523.3,113.6 L530.8,110.0 L538.4,106.6 L545.9,103.6 L553.4,102.0 L560.9,101.6 L568.5,100.9 L576.0,97.0 L583.5,95.0 L591.1,91.3 L598.6,86.1 L606.1,80.3 L613.6,75.2 L621.2,70.1 L628.7,66.8 L636.2,62.2 L643.8,57.6 L651.3,52.1 L658.8,46.0 L666.4,42.1 L673.9,39.1 L681.4,32.4 L688.9,24.5 L696.5,18.7 L704.0,12.0 L704.0,226.0 L64.0,226.0 Z"/><path class="line" d="M64.0,226.0 L71.5,226.0 L79.1,226.0 L86.6,226.0 L94.1,226.0 L101.6,225.9 L109.2,225.6 L116.7,224.6 L124.2,223.7 L131.8,222.7 L139.3,222.4 L146.8,221.7 L154.4,221.3 L161.9,220.3 L169.4,218.6 L176.9,217.2 L184.5,214.9 L192.0,213.6 L199.5,212.0 L207.1,210.4 L214.6,208.9 L222.1,206.6 L229.6,205.5 L237.2,203.8 L244.7,202.7 L252.2,201.8 L259.8,200.5 L267.3,198.8 L274.8,197.2 L282.4,195.3 L289.9,194.2 L297.4,193.0 L304.9,191.1 L312.5,188.4 L320.0,183.9 L327.5,179.5 L335.1,176.4 L342.6,173.3 L350.1,171.5 L357.6,168.2 L365.2,164.2 L372.7,161.1 L380.2,157.0 L387.8,152.4 L395.3,148.5 L402.8,146.4 L410.4,143.6 L417.9,142.7 L425.4,142.7 L432.9,142.7 L440.5,142.1 L448.0,137.9 L455.5,137.0 L463.1,134.9 L470.6,131.6 L478.1,129.3 L485.6,127.1 L493.2,122.7 L500.7,119.5 L508.2,116.9 L515.8,116.0 L523.3,113.6 L530.8,110.0 L538.4,106.6 L545.9,103.6 L553.4,102.0 L560.9,101.6 L568.5,100.9 L576.0,97.0 L583.5,95.0 L591.1,91.3 L598.6,86.1 L606.1,80.3 L613.6,75.2 L621.2,70.1 L628.7,66.8 L636.2,62.2 L643.8,57.6 L651.3,52.1 L658.8,46.0 L666.4,42.1 L673.9,39.1 L681.4,32.4 L688.9,24.5 L696.5,18.7 L704.0,12.0"/><circle class="end" cx="704.0" cy="12.0" r="4"/><text class="endlab" x="696.0" y="2.0" text-anchor="end">$362k</text><text class="tick" x="64.0" y="250" text-anchor="start">Jun 11</text><text class="tick" x="214.6" y="250" text-anchor="middle">Jul 1</text><text class="tick" x="448.0" y="250" text-anchor="middle">Aug 1</text><text class="tick" x="681.4" y="250" text-anchor="middle">Sep 1</text><text class="tick" x="704.0" y="250" text-anchor="end">Sep 3</text><circle class="hit" cx="64.0" cy="226.0" r="7"><title>2026-06-11: $-1</title></circle><circle class="hit" cx="71.5" cy="226.0" r="7"><title>2026-06-12: $-1</title></circle><circle class="hit" cx="79.1" cy="226.0" r="7"><title>2026-06-13: $-19</title></circle><circle class="hit" cx="86.6" cy="226.0" r="7"><title>2026-06-14: $-47</title></circle><circle class="hit" cx="94.1" cy="226.0" r="7"><title>2026-06-15: $-49</title></circle><circle class="hit" cx="101.6" cy="225.9" r="7"><title>2026-06-16: $156</title></circle><circle class="hit" cx="109.2" cy="225.6" r="7"><title>2026-06-17: $700</title></circle><circle class="hit" cx="116.7" cy="224.6" r="7"><title>2026-06-18: $2,320</title></circle><circle class="hit" cx="124.2" cy="223.7" r="7"><title>2026-06-19: $3,781</title></circle><circle class="hit" cx="131.8" cy="222.7" r="7"><title>2026-06-20: $5,513</title></circle><circle class="hit" cx="139.3" cy="222.4" r="7"><title>2026-06-21: $6,001</title></circle><circle class="hit" cx="146.8" cy="221.7" r="7"><title>2026-06-22: $7,237</title></circle><circle class="hit" cx="154.4" cy="221.3" r="7"><title>2026-06-23: $7,860</title></circle><circle class="hit" cx="161.9" cy="220.3" r="7"><title>2026-06-24: $9,588</title></circle><circle class="hit" cx="169.4" cy="218.6" r="7"><title>2026-06-25: $12,423</title></circle><circle class="hit" cx="176.9" cy="217.2" r="7"><title>2026-06-26: $14,831</title></circle><circle class="hit" cx="184.5" cy="214.9" r="7"><title>2026-06-27: $18,742</title></circle><circle class="hit" cx="192.0" cy="213.6" r="7"><title>2026-06-28: $20,940</title></circle><circle class="hit" cx="199.5" cy="212.0" r="7"><title>2026-06-29: $23,654</title></circle><circle class="hit" cx="207.1" cy="210.4" r="7"><title>2026-06-30: $26,331</title></circle><circle class="hit" cx="214.6" cy="208.9" r="7"><title>2026-07-01: $28,946</title></circle><circle class="hit" cx="222.1" cy="206.6" r="7"><title>2026-07-02: $32,724</title></circle><circle class="hit" cx="229.6" cy="205.5" r="7"><title>2026-07-03: $34,584</title></circle><circle class="hit" cx="237.2" cy="203.8" r="7"><title>2026-07-04: $37,463</title></circle><circle class="hit" cx="244.7" cy="202.7" r="7"><title>2026-07-05: $39,349</title></circle><circle class="hit" cx="252.2" cy="201.8" r="7"><title>2026-07-06: $40,879</title></circle><circle class="hit" cx="259.8" cy="200.5" r="7"><title>2026-07-07: $43,123</title></circle><circle class="hit" cx="267.3" cy="198.8" r="7"><title>2026-07-08: $45,902</title></circle><circle class="hit" cx="274.8" cy="197.2" r="7"><title>2026-07-09: $48,742</title></circle><circle class="hit" cx="282.4" cy="195.3" r="7"><title>2026-07-10: $51,906</title></circle><circle class="hit" cx="289.9" cy="194.2" r="7"><title>2026-07-11: $53,693</title></circle><circle class="hit" cx="297.4" cy="193.0" r="7"><title>2026-07-12: $55,753</title></circle><circle class="hit" cx="304.9" cy="191.1" r="7"><title>2026-07-13: $58,996</title></circle><circle class="hit" cx="312.5" cy="188.4" r="7"><title>2026-07-14: $63,536</title></circle><circle class="hit" cx="320.0" cy="183.9" r="7"><title>2026-07-15: $71,192</title></circle><circle class="hit" cx="327.5" cy="179.5" r="7"><title>2026-07-16: $78,691</title></circle><circle class="hit" cx="335.1" cy="176.4" r="7"><title>2026-07-17: $83,900</title></circle><circle class="hit" cx="342.6" cy="173.3" r="7"><title>2026-07-18: $89,110</title></circle><circle class="hit" cx="350.1" cy="171.5" r="7"><title>2026-07-19: $92,170</title></circle><circle class="hit" cx="357.6" cy="168.2" r="7"><title>2026-07-20: $97,807</title></circle><circle class="hit" cx="365.2" cy="164.2" r="7"><title>2026-07-21: $104,599</title></circle><circle class="hit" cx="372.7" cy="161.1" r="7"><title>2026-07-22: $109,810</title></circle><circle class="hit" cx="380.2" cy="157.0" r="7"><title>2026-07-23: $116,688</title></circle><circle class="hit" cx="387.8" cy="152.4" r="7"><title>2026-07-24: $124,548</title></circle><circle class="hit" cx="395.3" cy="148.5" r="7"><title>2026-07-25: $131,095</title></circle><circle class="hit" cx="402.8" cy="146.4" r="7"><title>2026-07-26: $134,666</title></circle><circle class="hit" cx="410.4" cy="143.6" r="7"><title>2026-07-27: $139,444</title></circle><circle class="hit" cx="417.9" cy="142.7" r="7"><title>2026-07-28: $140,914</title></circle><circle class="hit" cx="425.4" cy="142.7" r="7"><title>2026-07-29: $140,914</title></circle><circle class="hit" cx="432.9" cy="142.7" r="7"><title>2026-07-30: $140,914</title></circle><circle class="hit" cx="440.5" cy="142.1" r="7"><title>2026-07-31: $141,900</title></circle><circle class="hit" cx="448.0" cy="137.9" r="7"><title>2026-08-01: $149,055</title></circle><circle class="hit" cx="455.5" cy="137.0" r="7"><title>2026-08-02: $150,498</title></circle><circle class="hit" cx="463.1" cy="134.9" r="7"><title>2026-08-03: $154,172</title></circle><circle class="hit" cx="470.6" cy="131.6" r="7"><title>2026-08-04: $159,709</title></circle><circle class="hit" cx="478.1" cy="129.3" r="7"><title>2026-08-05: $163,635</title></circle><circle class="hit" cx="485.6" cy="127.1" r="7"><title>2026-08-06: $167,276</title></circle><circle class="hit" cx="493.2" cy="122.7" r="7"><title>2026-08-07: $174,821</title></circle><circle class="hit" cx="500.7" cy="119.5" r="7"><title>2026-08-08: $180,198</title></circle><circle class="hit" cx="508.2" cy="116.9" r="7"><title>2026-08-09: $184,631</title></circle><circle class="hit" cx="515.8" cy="116.0" r="7"><title>2026-08-10: $186,001</title></circle><circle class="hit" cx="523.3" cy="113.6" r="7"><title>2026-08-11: $190,136</title></circle><circle class="hit" cx="530.8" cy="110.0" r="7"><title>2026-08-12: $196,225</title></circle><circle class="hit" cx="538.4" cy="106.6" r="7"><title>2026-08-13: $201,974</title></circle><circle class="hit" cx="545.9" cy="103.6" r="7"><title>2026-08-14: $207,025</title></circle><circle class="hit" cx="553.4" cy="102.0" r="7"><title>2026-08-15: $209,836</title></circle><circle class="hit" cx="560.9" cy="101.6" r="7"><title>2026-08-16: $210,506</title></circle><circle class="hit" cx="568.5" cy="100.9" r="7"><title>2026-08-17: $211,684</title></circle><circle class="hit" cx="576.0" cy="97.0" r="7"><title>2026-08-18: $218,267</title></circle><circle class="hit" cx="583.5" cy="95.0" r="7"><title>2026-08-19: $221,604</title></circle><circle class="hit" cx="591.1" cy="91.3" r="7"><title>2026-08-20: $227,830</title></circle><circle class="hit" cx="598.6" cy="86.1" r="7"><title>2026-08-21: $236,756</title></circle><circle class="hit" cx="606.1" cy="80.3" r="7"><title>2026-08-22: $246,542</title></circle><circle class="hit" cx="613.6" cy="75.2" r="7"><title>2026-08-23: $255,186</title></circle><circle class="hit" cx="621.2" cy="70.1" r="7"><title>2026-08-24: $263,711</title></circle><circle class="hit" cx="628.7" cy="66.8" r="7"><title>2026-08-25: $269,272</title></circle><circle class="hit" cx="636.2" cy="62.2" r="7"><title>2026-08-26: $277,136</title></circle><circle class="hit" cx="643.8" cy="57.6" r="7"><title>2026-08-27: $284,888</title></circle><circle class="hit" cx="651.3" cy="52.1" r="7"><title>2026-08-28: $294,266</title></circle><circle class="hit" cx="658.8" cy="46.0" r="7"><title>2026-08-29: $304,547</title></circle><circle class="hit" cx="666.4" cy="42.1" r="7"><title>2026-08-30: $311,136</title></circle><circle class="hit" cx="673.9" cy="39.1" r="7"><title>2026-08-31: $316,243</title></circle><circle class="hit" cx="681.4" cy="32.4" r="7"><title>2026-09-01: $327,527</title></circle><circle class="hit" cx="688.9" cy="24.5" r="7"><title>2026-09-02: $340,988</title></circle><circle class="hit" cx="696.5" cy="18.7" r="7"><title>2026-09-03: $350,695</title></circle><circle class="hit" cx="704.0" cy="12.0" r="7"><title>2026-09-03: $362,056</title></circle></svg>
+<figcaption><b>Figure 1.</b> Cumulative profit by day from Polymarket's P&amp;L API. The curve is close to monotonic. The largest peak-to-trough decline over the whole period is $48, which rules out directional betting as the source of returns.</figcaption></figure>
+
+<h3>What the fills look like</h3>
+<p>The activity API caps history at 5,000 rows, which covered about 6.5 hours of September 3: 4,926 fills and 74 redemptions across 83 windows.</p>
+<ul>
+ <li><b>Buy only.</b> Not a single sell in 4,926 fills, nor in a 490-fill sample from July 17. Exits happen by redemption after the window resolves.</li>
+ <li><b>90% BTC, 10% ETH.</b> Roughly every window: 503 of 575 BTC windows in the 48-hour scan below.</li>
+ <li><b>Both sides in 88% of windows.</b> Median 29 fills per window, median fill $6, mean $15, bursts of up to 21 fills in one second. The average Up price plus average Down price comes to about 0.975 to 0.99, so paired shares are bought at a small discount to the $1 payout.</li>
+ <li><b>Maker and taker mixed.</b> 60% of fills carry no fee (resting limit orders), 40% pay the taker fee of about 1.55 cents per share. Fees in the sample: $1,283 on $74,804 spent.</li>
+ <li><b>Spread across the window.</b> Fill timing runs from 4 to 288 seconds after the open, median 111 seconds. Minute 0 is the busiest and loses money; minutes 1 to 3 make it.</li>
+</ul>
+
+<h3>Where the edge sits</h3>
+<p>Matching each completed window's redemption to its cost gives the true per-window result: <b>+$1,132 on $73,506 deployed across 72 windows, a 1.5% margin after fees</b>. 39 of 72 windows were profitable, the median window made $0.60, and the tails ran from −$477 to +$641. Scaled across a full day that reproduces the leaderboard figure of about $10K on $919K of volume.</p>
+
+<figure><svg class="chart" viewBox="0 0 720 256" role="img" aria-label="Observed minus implied win rate by entry price bucket"><line class="zero" x1="410.0" x2="410.0" y1="8" y2="248"/><rect class="bar pos" x="410.0" y="13" width="240.0" height="20" rx="0"><title>0.10–0.19: +9 pts</title></rect><text class="lab" x="160" y="27.0" text-anchor="end">0.10–0.19</text><text class="val" x="658.0" y="27.0" text-anchor="start">+9 pts</text><rect class="bar pos" x="410.0" y="43" width="1.0" height="20" rx="0"><title>0.20–0.29: +0 pts</title></rect><text class="lab" x="160" y="57.0" text-anchor="end">0.20–0.29</text><text class="val" x="418.0" y="57.0" text-anchor="start">+0 pts</text><rect class="bar pos" x="410.0" y="73" width="160.0" height="20" rx="0"><title>0.30–0.39: +6 pts</title></rect><text class="lab" x="160" y="87.0" text-anchor="end">0.30–0.39</text><text class="val" x="578.0" y="87.0" text-anchor="start">+6 pts</text><rect class="bar pos" x="410.0" y="103" width="186.7" height="20" rx="0"><title>0.40–0.49: +7 pts</title></rect><text class="lab" x="160" y="117.0" text-anchor="end">0.40–0.49</text><text class="val" x="604.7" y="117.0" text-anchor="start">+7 pts</text><rect class="bar neg" x="330.0" y="133" width="80.0" height="20" rx="0"><title>0.50–0.59: -3 pts</title></rect><text class="lab" x="160" y="147.0" text-anchor="end">0.50–0.59</text><text class="val" x="322.0" y="147.0" text-anchor="end">-3 pts</text><rect class="bar neg" x="330.0" y="163" width="80.0" height="20" rx="0"><title>0.60–0.69: -3 pts</title></rect><text class="lab" x="160" y="177.0" text-anchor="end">0.60–0.69</text><text class="val" x="322.0" y="177.0" text-anchor="end">-3 pts</text><rect class="bar pos" x="410.0" y="193" width="53.3" height="20" rx="0"><title>0.70–0.79: +2 pts</title></rect><text class="lab" x="160" y="207.0" text-anchor="end">0.70–0.79</text><text class="val" x="471.3" y="207.0" text-anchor="start">+2 pts</text><rect class="bar neg" x="196.7" y="223" width="213.3" height="20" rx="0"><title>0.80–0.89: -8 pts</title></rect><text class="lab" x="160" y="237.0" text-anchor="end">0.80–0.89</text><text class="val" x="188.7" y="237.0" text-anchor="end">-8 pts</text></svg>
+<figcaption><b>Figure 2.</b> Observed win rate minus the rate implied by price, by entry-price bucket, for the 72 completed windows. Cheap contracts win far more often than their price says. Contracts above 0.50 win slightly less often than implied, which marks them as hedge legs rather than bets.</figcaption></figure>
+
+<p>Comparing every BTC fill to Binance's 1-minute candle for that moment separates two profitable regimes:</p>
+<div class="tbl"><table>
+<tr><th>Fill type (vs live BTC move from window open)</th><th>Fills</th><th>Hit rate</th><th>Spent</th><th>P&amp;L</th></tr>
+<tr class="hl"><td>Buys the trailing side, move ≤ 0.05%</td><td>1,378</td><td>58%</td><td>$18,107</td><td>+$5,389</td></tr>
+<tr class="hl"><td>Buys the leading side, move &gt; 0.05%</td><td>580</td><td>80%</td><td>$15,176</td><td>+$3,204</td></tr>
+<tr><td>Buys the leading side, move ≤ 0.05%</td><td>1,231</td><td>39%</td><td>$23,772</td><td>−$6,190</td></tr>
+<tr><td>Buys the trailing side, move &gt; 0.05%</td><td>735</td><td>29%</td><td>$6,795</td><td>−$1,308</td></tr>
+<tr><td>Flat</td><td>477</td><td>46%</td><td>$7,188</td><td>−$116</td></tr>
+</table></div>
+<p>The first row is <b>fading overreaction</b>: when BTC has barely moved, the crowd overprices whichever side ticked last, and the bot buys the other one. The second is <b>latency</b>: when BTC has already moved, the bot buys the leading side before the order book catches up. The two losing rows are consistent with hedge legs taken to cap inventory risk, not with bets.</p>
+
+<div class="callout"><p><b>Capital efficiency.</b> With roughly $15K to $20K working capital, about $3K goes into each window and comes back five minutes later. That is near $1M of daily turnover on a bankroll smaller than a used car, which is why a 1.5% margin compounds to $10K a day.</p></div>
+
+<h2>2. Kelly sizing for a binary contract</h2>
+<p>Buying a share at price <code>p</code> that pays $1 with true probability <code>q</code>, the growth-optimal fraction of bankroll is</p>
+<p class="mono" style="font-size:16px;margin:14px 0 18px">f* = (q − p) / (1 − p)</p>
+<p>Payoff odds are <code>b = (1 − p) / p</code> and the general form <code>f = (bq − (1 − q)) / b</code> reduces to the line above. With a taker fee, use the effective price <code>p + fee</code> (about 0.015 here). A negative result means no bet.</p>
+<div class="tbl"><table>
+<tr><th>Price bucket</th><th>Paid p</th><th>Observed q</th><th>Full Kelly f*</th></tr>
+<tr><td>0.10–0.20</td><td>0.15</td><td>24%</td><td>10.6%</td></tr>
+<tr><td>0.20–0.30</td><td>0.25</td><td>25%</td><td>0% (no edge)</td></tr>
+<tr><td>0.30–0.40</td><td>0.35</td><td>41%</td><td>9.2%</td></tr>
+<tr><td>0.40–0.50</td><td>0.45</td><td>52%</td><td>12.7%</td></tr>
+<tr><td>0.50 and above</td><td>0.55–0.85</td><td>at or below implied</td><td>0%</td></tr>
+</table></div>
+<p>The whale's actual behaviour reads as fractional Kelly on a hedged book. Gross deployment of about $3K per window is 15% to 20% of bankroll, which looks like full Kelly or more. But Up and Down share counts differ by only about 20% on median, so net directional exposure is closer to $600, or 3% to 4% of bankroll. That is quarter to half Kelly on the actual bet, with the remainder locked into near-riskless pairs. It explains the $48 drawdown.</p>
+<h3>Why to shade below the table</h3>
+<ul>
+ <li><b>Effective sample size is windows, not fills.</b> All 30 fills in a window share one outcome, so 4,800 fills are 72 independent trials. A 52% hit rate on 72 trials has a standard error near 6 points, which spans the entire edge. Half or quarter Kelly is the textbook response.</li>
+ <li><b>Correlated bets.</b> BTC and ETH windows open together and resolve on the same macro move. Size them as one bet.</li>
+ <li><b>q must come from a live model</b> of distance from the window open and time remaining. The bucket table summarises that model; it cannot replace it.</li>
+ <li><b>Fees flip marginal edges.</b> A 0.25 contract with a 25% hit rate is break-even before fees and a loser after them.</li>
+</ul>
+<p class="small">Rule of thumb: size each side at a quarter of <code>(q − p − fee) / (1 − p)</code>, cap total exposure so a full loss on the unhedged tilt costs under 2% of bankroll, and pause when the rolling 200-window hit rate falls inside the noise band of the implied price.</p>
+
+<h2>3. Who else wins these markets</h2>
+<p>Every trade in the last 575 BTC five-minute windows (48 hours to September 3, 936,279 trades, 10,436 wallets) was pulled and each wallet's P&amp;L in those markets computed from cash flows plus the official resolution. Leaders were then cross-checked against their account-wide P&amp;L history. "Best" here means large and consistent, not a lucky two days.</p>
+<div class="tbl"><table>
+<tr><th>Wallet</th><th>48 h BTC-5m P&amp;L</th><th>All-time P&amp;L</th><th>Profitable days</th><th>Max DD</th><th>Style</th></tr>
+<tr><td><span class="addr">0xeebde7a0e019a63e6b476eb425505b7b3e6eba30</span><br><span class="small">Bonereaper</span></td><td>$11.4K</td><td>$1.39M</td><td>141 / 164</td><td>$24.6K</td><td>Both-sides hedger, buy-only</td></tr>
+<tr><td><span class="addr">0xb55fa1296e6ec55d0ce53d93b9237389f11764d4</span></td><td>$8.8K</td><td>$1.10M</td><td>110 / 128</td><td>$10.4K</td><td>Both-sides hedger, buy-only</td></tr>
+<tr><td><span class="addr">0x20d2309cd92b797ae7ca175ed828ed8a27fbe29d</span></td><td>$7.5K</td><td>$708K</td><td>163 / 164</td><td>$0</td><td>Hedger who also sells; 65% window win rate</td></tr>
+<tr><td><span class="addr">0xce25e214d5cfe4f459…</span><br><span class="small">shown as 0xcE25E214D5cfE4f459 on the leaderboard</span></td><td>$2.9K</td><td>$642K</td><td>120 / 128</td><td>$2.2K</td><td>Both-sides hedger</td></tr>
+<tr><td><span class="addr">0x0cb038487586d1119b165466072e9baf666f3a90</span></td><td>$24.7K</td><td>$450K</td><td>54 / 75</td><td>$7.5K</td><td>Top 48 h earner; hedges and sells; 5% margin</td></tr>
+<tr class="hl"><td><span class="addr">0x3048d65321be3497164cdfc2996f94f98a2e7537</span><br><span class="small">x-MoneyForWhiskas, the subject of this note</span></td><td>$15.2K</td><td>$363K</td><td>80 / 87</td><td>$48</td><td>Both-sides hedger, buy-only</td></tr>
+<tr><td><span class="addr">0x32ed2e546b187ca15e2841edc82b22c713cf8ec3</span><br><span class="small">mo-money</span></td><td>$4.4K</td><td>$351K</td><td>80 / 213</td><td>$1.9K</td><td>Selective cheap-side buyer</td></tr>
+<tr><td><span class="addr">0x3725d52f3c252e8374999cc8617292ea2608ad88</span><br><span class="small">almach</span></td><td>$3.7K</td><td>$263K</td><td>83 / 106</td><td>$8.3K</td><td>Cheap-side buyer, enters late</td></tr>
+<tr><td><span class="addr">0x3c58ef422754ff22c7e806336feba0064d8b776b</span><br><span class="small">antsaslyku</span></td><td>$6.2K</td><td>$258K</td><td>114 / 134</td><td>$2.3K</td><td>8.6% margin, partial hedging</td></tr>
+<tr><td><span class="addr">0xc53375ff94e96100f2b30a4b5775db35218d69a9</span><br><span class="small">Its-Just-A-Bunch-Of-If</span></td><td>$9.4K</td><td>$108K</td><td>43 / 50</td><td>$466</td><td>Same playbook, seven weeks old</td></tr>
+<tr><td><span class="addr">0x48ac40fc545cf327edd5365435c3a9f385614a7e</span><br><span class="small">BoneOhio</span></td><td>$3.2K</td><td>$292K</td><td>136 / 165</td><td>$20.0K</td><td>Final-minute sniper: avg entry 0.91, 90% win, 0.6% margin</td></tr>
+</table></div>
+<p><b>What the leaders share.</b> Average entry price near 0.50, median entry 90 to 130 seconds into the window, both sides bought in 86% to 100% of windows, participation in roughly 500 of the 575 windows, and in most cases no selling at all. The two who do sell show higher margin per dollar.</p>
+<p><b>Ignore these 48-hour "winners".</b> cryptokam9, Lufi93, mzkj001 and 0x75b9369f rank high on two-day P&amp;L but traded 20 to 35 windows, have tiny or negative all-time results, and never hedge. That is variance.</p>
+<p class="small">Caveats: 48-hour figures are BTC-only, pre-fee, and ignore split and merge operations. All-time P&amp;L is account-wide, so for wallets that also trade ETH windows or other markets it overstates the BTC-5m share. Profiles are at polymarket.com/profile/ followed by the address.</p>
+
+<h2>4. The paper run in this repo</h2>
+<p>309 markets resolved between Sep 4 17:06 and Sep 5 05:02 UTC, five assets (BTC, ETH, SOL, BNB, XRP), 5-minute windows only, strategy <code>directional</code>: buy 5 shares of the side whose model confidence is at least 0.75 and whose ask is at least 0.70, stop out when that side's ask falls to 0.45.</p>
+
+<figure><svg class="chart" viewBox="0 0 720 260" role="img" aria-label="Cumulative paper P&amp;L by hour, 309 markets"><line class="grid" x1="64" x2="704" y1="190.2" y2="190.2"/><text class="tick" x="56" y="194.2" text-anchor="end">−$60</text><line class="grid" x1="64" x2="704" y1="130.8" y2="130.8"/><text class="tick" x="56" y="134.8" text-anchor="end">−$40</text><line class="grid" x1="64" x2="704" y1="71.4" y2="71.4"/><text class="tick" x="56" y="75.4" text-anchor="end">−$20</text><line class="grid" x1="64" x2="704" y1="12.0" y2="12.0"/><text class="tick" x="56" y="16.0" text-anchor="end">$0</text><path class="area" d="M64.0,12.0 L128.0,36.5 L192.0,24.3 L256.0,68.2 L320.0,95.6 L384.0,115.5 L448.0,111.3 L512.0,98.7 L576.0,105.1 L640.0,164.6 L704.0,226.0 L704.0,12.0 L64.0,12.0 Z"/><path class="line" d="M64.0,12.0 L128.0,36.5 L192.0,24.3 L256.0,68.2 L320.0,95.6 L384.0,115.5 L448.0,111.3 L512.0,98.7 L576.0,105.1 L640.0,164.6 L704.0,226.0"/><circle class="end" cx="704.0" cy="226.0" r="4"/><text class="endlab" x="696.0" y="216.0" text-anchor="end">−$72</text><text class="tick" x="128.0" y="250" text-anchor="middle">17</text><text class="tick" x="192.0" y="250" text-anchor="middle">18</text><text class="tick" x="256.0" y="250" text-anchor="middle">19</text><text class="tick" x="320.0" y="250" text-anchor="middle">20</text><text class="tick" x="384.0" y="250" text-anchor="middle">21</text><text class="tick" x="448.0" y="250" text-anchor="middle">22</text><text class="tick" x="512.0" y="250" text-anchor="middle">23</text><text class="tick" x="576.0" y="250" text-anchor="middle">00</text><text class="tick" x="640.0" y="250" text-anchor="middle">01</text><text class="tick" x="704.0" y="250" text-anchor="middle">02</text><circle class="hit" cx="64.0" cy="12.0" r="7"><title>start 17:06 UTC · $0.00</title></circle><circle class="hit" cx="128.0" cy="36.5" r="7"><title>17:00–17:59 UTC · 29 markets · -8.25 · cum $-8.25</title></circle><circle class="hit" cx="192.0" cy="24.3" r="7"><title>18:00–18:59 UTC · 36 markets · +4.10 · cum $-4.15</title></circle><circle class="hit" cx="256.0" cy="68.2" r="7"><title>19:00–19:59 UTC · 44 markets · -14.76 · cum $-18.91</title></circle><circle class="hit" cx="320.0" cy="95.6" r="7"><title>20:00–20:59 UTC · 35 markets · -9.22 · cum $-28.13</title></circle><circle class="hit" cx="384.0" cy="115.5" r="7"><title>21:00–21:59 UTC · 33 markets · -6.71 · cum $-34.84</title></circle><circle class="hit" cx="448.0" cy="111.3" r="7"><title>22:00–22:59 UTC · 6 markets · +1.40 · cum $-33.44</title></circle><circle class="hit" cx="512.0" cy="98.7" r="7"><title>23:00–23:59 UTC · 23 markets · +4.25 · cum $-29.19</title></circle><circle class="hit" cx="576.0" cy="105.1" r="7"><title>00:00–00:59 UTC · 33 markets · -2.17 · cum $-31.36</title></circle><circle class="hit" cx="640.0" cy="164.6" r="7"><title>01:00–01:59 UTC · 40 markets · -20.03 · cum $-51.39</title></circle><circle class="hit" cx="704.0" cy="226.0" r="7"><title>02:00–02:59 UTC · 30 markets · -20.66 · cum $-72.05</title></circle></svg>
+<figcaption><b>Figure 3.</b> Cumulative paper P&amp;L by hour of resolution (UTC). Hover a point for the hour's count and result. Only two of ten hours were positive, and the last two hours account for more than half the loss.</figcaption></figure>
+
+<div class="tbl"><table>
+<tr><th>Bucket</th><th>Markets</th><th>P&amp;L</th><th>Win rate</th></tr>
+<tr><td>Held to resolution, won</td><td>201</td><td>+$173.30</td><td>100%</td></tr>
+<tr><td>Held to resolution, lost</td><td>19</td><td>−$60.96</td><td>0%</td></tr>
+<tr><td>Stopped out before close</td><td>89</td><td>−$184.40</td><td>0%</td></tr>
+<tr class="hl"><td>Total</td><td>309</td><td>$-72.05</td><td>65%</td></tr>
+</table></div>
+
+<h3>Findings</h3>
+<ul>
+ <li><b>The payoff is asymmetric and the win rate does not cover it.</b> Mean entry 0.80: a win pays about $1.00 on 5 shares, a full loss costs $4, a stop costs about $2.35. Break-even needs roughly 80% winners across all entries. The run delivered 65%.</li>
+ <li><b>The stop-loss does not protect capital.</b> The trigger is a 0.45 ask, but after the 2-second modelled latency the fills average 0.33 (39 fills at 0.4, 22 at 0.3, 21 at 0.2). Holding the 89 stopped positions to resolution would have lost $187.60 instead of $184.40. The stop is neutral in aggregate: the problem is the 29% of entries that reverse, not the exit rule.</li>
+ <li><b>Model confidence carries no information.</b> Stop-out rate by confidence bucket: 0.70–0.75: 33%; 0.75–0.80: 31%; 0.80–0.85: 27%; 0.85–0.90: 36%; 0.90–0.95: 26%; 0.95–1.00: 28%. Held positions win about 91% regardless. The fair-value gate is not separating good entries from bad ones; the book price alone is doing the work.</li>
+ <li><b>Regime is the strongest filter available.</b> Trending: 85 markets, +$19.93, 15% stopped. Choppy: 224 markets, −$91.99, 34% stopped. 76 of 89 stops were in choppy regime.</li>
+ <li><b>Expensive entries have no edge.</b> Held entries at 0.70–0.89 beat implied odds by 10 to 13 points. Entries at 0.90 and above won 95% to 96%, which is the implied rate, and netted about zero. That is 90 cents at risk to win 5 to 10.</li>
+ <li><b>Entry timing barely matters</b> for held positions (89% to 100% win in every minute), which again points at the stops as the whole story.</li>
+</ul>
+
+<figure><svg class="chart" viewBox="0 0 720 196" role="img" aria-label="Paper P&amp;L by regime and outcome"><line class="zero" x1="410.0" x2="410.0" y1="8" y2="188"/><rect class="bar pos" x="410.0" y="13" width="169.5" height="20" rx="0"><title>choppy · held, won: $111</title></rect><text class="lab" x="160" y="27.0" text-anchor="end">choppy · held, won</text><text class="val" x="587.5" y="27.0" text-anchor="start">$111</text><rect class="bar pos" x="410.0" y="43" width="94.9" height="20" rx="0"><title>trending · held, won: $62</title></rect><text class="lab" x="160" y="57.0" text-anchor="end">trending · held, won</text><text class="val" x="512.9" y="57.0" text-anchor="start">$62</text><rect class="bar neg" x="386.8" y="73" width="23.2" height="20" rx="0"><title>trending · held, lost: −$15</title></rect><text class="lab" x="160" y="87.0" text-anchor="end">trending · held, lost</text><text class="val" x="378.8" y="87.0" text-anchor="end">−$15</text><rect class="bar neg" x="368.7" y="103" width="41.3" height="20" rx="0"><title>trending · stopped out: −$27</title></rect><text class="lab" x="160" y="117.0" text-anchor="end">trending · stopped out</text><text class="val" x="360.7" y="117.0" text-anchor="end">−$27</text><rect class="bar neg" x="340.2" y="133" width="69.8" height="20" rx="0"><title>choppy · held, lost: −$46</title></rect><text class="lab" x="160" y="147.0" text-anchor="end">choppy · held, lost</text><text class="val" x="332.2" y="147.0" text-anchor="end">−$46</text><rect class="bar neg" x="170.0" y="163" width="240.0" height="20" rx="0"><title>choppy · stopped out: −$157</title></rect><text class="lab" x="160" y="177.0" text-anchor="end">choppy · stopped out</text><text class="val" x="162.0" y="177.0" text-anchor="end">−$157</text></svg>
+<figcaption><b>Figure 4.</b> Paper P&amp;L split by regime and outcome. Choppy windows produce both the largest wins and almost all of the stop-outs; trending windows are net positive with few stops.</figcaption></figure>
+
+<div class="two">
+<div class="tbl"><table>
+<tr><th>Asset</th><th>Markets</th><th>P&amp;L</th><th>Win</th></tr><tr><td>BTC</td><td>59</td><td>$+8.95</td><td>80%</td></tr><tr><td>BNB</td><td>55</td><td>$-13.90</td><td>65%</td></tr><tr><td>ETH</td><td>62</td><td>$-18.32</td><td>65%</td></tr><tr><td>XRP</td><td>61</td><td>$-21.22</td><td>62%</td></tr><tr><td>SOL</td><td>72</td><td>$-27.57</td><td>56%</td></tr></table></div>
+<div class="tbl"><table>
+<tr><th>Hour (UTC)</th><th>Markets</th><th>P&amp;L</th><th>Win</th></tr><tr><td>23:00</td><td>23</td><td>$+4.25</td><td>78%</td></tr><tr><td>18:00</td><td>36</td><td>$+4.10</td><td>81%</td></tr><tr><td>22:00</td><td>6</td><td>$+1.40</td><td>83%</td></tr><tr><td>00:00</td><td>33</td><td>$-2.17</td><td>76%</td></tr><tr><td>21:00</td><td>33</td><td>$-6.71</td><td>61%</td></tr><tr><td>17:00</td><td>29</td><td>$-8.25</td><td>55%</td></tr><tr><td>20:00</td><td>35</td><td>$-9.22</td><td>63%</td></tr><tr><td>19:00</td><td>44</td><td>$-14.76</td><td>61%</td></tr><tr><td>01:00</td><td>40</td><td>$-20.03</td><td>60%</td></tr><tr><td>02:00</td><td>30</td><td>$-20.66</td><td>50%</td></tr></table></div>
+</div>
+<p>BTC is the only asset in the black. SOL, XRP, ETH and BNB all lose, and SOL reverses most within five minutes. The 01:00 to 02:00 UTC hours (9 to 10 PM Eastern) are the worst stretch, losing about $41 over 70 markets.</p>
+
+<h3>Data quality problems in the run</h3>
+<ul>
+ <li><b>81 of 220 held markets settled by the spot-proxy fallback</b>, not the official result. Those show an 83% win rate against 96% for officially settled ones, and 17 were decided by a move under 0.02%, where the Chainlink 60-second TWAP can disagree with the spot feed. Treat about $16 of P&amp;L as unverified.</li>
+ <li><b>The $40 daily-loss halt tripped</b> and generated 16,024 "halted" vetoes, yet trading resumed. Confirm whether the halt resets at UTC midnight by design.</li>
+ <li><b>The 4-market concurrency cap vetoed 24,583 signals.</b> With five assets running, the bot mostly trades whichever windows opened first, not the strongest signals.</li>
+ <li><b>Fees are zero in paper.</b> Live, the observed taker fee is about 1.5 cents per share and a stopped trade pays it on both legs. That is another $25 to $30 off this run.</li>
+ <li><b>Fill latency is a fixed 2,027 ms assumption</b> in paper mode. Real fills at 0.80 with FOK orders crossing two ticks will sometimes miss entirely and sometimes fill worse.</li>
+</ul>
+
+<div class="callout"><p><b>The contrast.</b> The profitable wallets buy at 0.49 to 0.58, hedge both sides, and never sell; their own fills show that buys above 0.50 lose slightly and cheap buys carry the edge. This bot buys one-sided at 0.80 and sells into weakness. It is systematically taking the side of the trade the whales are content to give away.</p></div>
+
+<h2>5. What to change, in order</h2>
+<ol>
+ <li><b>Restrict entries to 0.70–0.85 and skip 0.90 and above.</b> The high bucket contributed nothing while carrying most of the downside per share.</li>
+ <li><b>Trade only the trending regime</b>, or cut choppy size to the exchange minimum. This alone would have turned −$72 into roughly +$20 on the same signals.</li>
+ <li><b>Drop SOL, XRP and BNB</b> until BTC alone is reliably profitable. Each alt lost between $14 and $28 over the run.</li>
+ <li><b>Remove the stop or set it near 0.60</b> so the fill lands above 0.45. At 5 shares the stop is not saving capital, and at current parameters it realises the worst of both worlds.</li>
+ <li><b>Fix the official-result fetch</b> so the fallback rarely fires. Right now 37% of held P&amp;L rests on a spot proxy that disagrees with the oracle near the strike.</li>
+ <li><b>Then, and only then, consider the whale's structure:</b> resting bids on both sides below fair value, taker fills on the cheap side after an overreaction, no exits before resolution, and Kelly-fraction sizing of the net tilt.</li>
+</ol>
+
+<div class="fn">
+<p><b>Methods.</b> Whale fills from data-api.polymarket.com/activity (5,000-row cap), redemptions matched by condition id; resolutions and events from gamma-api.polymarket.com/events by slug; P&amp;L history from user-pnl-api.polymarket.com; contract code and USDC balances via polygon-bor-rpc.publicnode.com; BTC reference from api.binance.us 1-minute klines; per-market trades from data-api.polymarket.com/trades (1,000 per page, none of the 575 markets hit the 5,000 cap). Wallet P&amp;L in Section 3 is cash flow plus winning holdings at $1, before fees, ignoring splits and merges. Paper-run figures were computed from data/trades.jsonl in this repo on 2026-09-05 (309 <code>resolved</code>, 407 <code>fill</code>, 565 <code>signal</code> records) before the log rotated; the file now holds only the current session, so the hourly and per-asset aggregates are reproduced here from that analysis.</p>
+<p><b>Nothing here is investment advice.</b> The whale's edge depends on latency, fee tier and a live pricing model that are not visible in public data, and past hit rates over 72 windows carry standard errors as wide as the edge itself.</p>
+</div>
+</div>

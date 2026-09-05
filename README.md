@@ -5,7 +5,7 @@ Two-layer bot for Polymarket's short-duration (5m/15m) BTC/ETH up-or-down market
 - **Layer 1 — paired accumulation**: equal YES+NO base entered at window open, then
   ladder adds that average each side down on swings — gated by a fair-value model AND a
   chop/trend regime classifier so it never averages into a one-way move.
-- **Layer 2 — momentum skew**: extra shares on one side only when live Binance momentum
+- **Layer 2 — momentum skew**: extra shares on one side only when live spot momentum
   and the Polymarket order book agree on a direction.
 
 Full design, strategy math, failure modes, and validation gates: [plan.md](plan.md).
@@ -99,10 +99,10 @@ Polymarket UI (the bot logs a reminder at each resolution).
 
 ## Notes
 
-- The strike is captured from Binance spot at window open, and windows joined late are
+- The strike is captured from the spot feed (Coinbase by default, `SPOT_EXCHANGE` in `.env`) at window open, and windows joined late are
   skipped (no reliable open price).
-- Resolution is settled against Binance spot as an **oracle proxy** in paper mode; the
+- If the official result can't be fetched, resolution falls back to feed spot as an **oracle proxy**; the
   real oracle can disagree (see plan.md Known Risks).
-- The spot feed host is `BINANCE_WS` in `.env`.
+- The spot venue is `SPOT_EXCHANGE` in `.env` (`coinbase` default, or `binance`); hosts are `COINBASE_WS` / `BINANCE_WS`.
 - Kill switch: daily loss beyond `MAX_DAILY_LOSS_USDC` cancels everything and halts;
   feed loss while exposed cancels all resting orders immediately.

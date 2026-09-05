@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     clob_host: str = "https://clob.polymarket.com"
     clob_ws: str = "wss://ws-subscriptions-clob.polymarket.com"
     gamma_host: str = "https://gamma-api.polymarket.com"
+    spot_exchange: str = "coinbase"     # spot reference venue: "coinbase" or "binance"
+    coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"
     binance_ws: str = "wss://stream.binance.com:9443"
     chain_id: int = 137
 
@@ -122,6 +124,14 @@ class Settings(BaseSettings):
         v = v.strip().lower()
         if v not in ("directional", "paired"):
             raise ValueError("STRATEGY must be 'directional' or 'paired'")
+        return v
+
+    @field_validator("spot_exchange")
+    @classmethod
+    def _spot_exchange_ok(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("coinbase", "binance"):
+            raise ValueError("SPOT_EXCHANGE must be 'coinbase' or 'binance'")
         return v
 
     @field_validator("buy_order_type")
